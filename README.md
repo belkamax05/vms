@@ -95,6 +95,7 @@ plugins, since list options from all of them concatenate.
 | `zsh` | nixpkgs' `zsh`, the login shell | `programs.zsh`, the login shell |
 | `repos` | `repos = [ { url; dir; } ]` cloned on desktop login, once the machine's vm-ssh key is on GitHub | the same |
 | `direnv` | direnv + nix-direnv from nixpkgs, zsh hook, `direnv.trusted` folders | `programs.direnv`, the same |
+| `zoxide` | zoxide from nixpkgs, zsh hook | `programs.zoxide` |
 
 ## Extending it from another repo
 
