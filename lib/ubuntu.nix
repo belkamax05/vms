@@ -30,6 +30,20 @@ let
 
   packages = lib.unique cfg.ubuntu.packages;
 
+  # ubuntu.nixPackages: one env of them all, and its whole closure as a
+  # tarball the runner serves next to the .debs. The guest unpacks it into
+  # its own /nix/store - store paths are absolute, so that's where they
+  # have to live - and links the env's binaries into /usr/local/bin through
+  # nixProfile, so that swapping the env (a new config on the same disk)
+  # is one symlink.
+  nixPackages = cfg.ubuntu.nixPackages != [ ];
+  nixEnv = pkgs.buildEnv { name = "${cfg.name}-nix-packages"; paths = cfg.ubuntu.nixPackages; };
+  nixClosure = pkgs.runCommand "${cfg.name}-nix-closure.tar" { } ''
+    sed 's|^/||' ${pkgs.closureInfo { rootPaths = [ nixEnv ]; }}/store-paths |
+      tar -cf $out -C / --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner -T -
+  '';
+  nixProfile = "/nix/var/vms/profile";
+
   # machines/<name>.lock.json, next to the machine's file (see
   # lib/default.nix), written by `vm lock`: the packages it was resolved
   # for, and every .deb that takes on top of the image.
@@ -48,6 +62,7 @@ let
         urls = [ "${aptPool}/${deb.path}" "${aptSnapshot}/${deb.path}" ];
       } // lib.getAttrs (lib.intersectLists [ "sha256" "sha512" ] (lib.attrNames deb)) deb)} $out/${deb.file}
     '') (lib.optionals (lockProblem == null && lock != null) lock.debs)}
+    ${lib.optionalString nixPackages "ln -s ${nixClosure} $out/nix-closure.tar"}
     cd $out && dpkg-scanpackages --multiversion . /dev/null > Packages
   '';
 
@@ -101,6 +116,19 @@ let
     ])
   ];
 
+  # Every step is safe to repeat. Links a previous env had that this one
+  # doesn't are dropped; the profile moves last, as the step's done-mark.
+  installNixPackages = [
+    "sh" "-c"
+    (lib.concatStringsSep " && " [
+      "curl -fsS @DEBS_URL@nix-closure.tar | tar -xf - -C /"
+      "find /usr/local/bin -lname '${nixProfile}/*' -delete"
+      "for bin in ${nixEnv}/bin/*; do ln -sf ${nixProfile}/bin/\"\${bin##*/}\" /usr/local/bin/; done"
+      "mkdir -p ${dirOf nixProfile}"
+      "ln -sfn ${nixEnv} ${nixProfile}"
+    ])
+  ];
+
   provisioned = "/var/lib/vms/provisioned";
   # The first-boot steps that install and configure: deferred files, and
   # runcmd (written by `runcmd`, run by `scripts_user`).
@@ -138,10 +166,12 @@ let
     runcmd = [
       [ "systemctl" "daemon-reload" ]
       [ "systemctl" "restart" "serial-getty@ttyS0.service" "getty@tty1.service" ]
-    ] ++ lib.optional (packages != [ ]) installPackages ++ cfg.ubuntu.runcmd ++ [
+    ] ++ lib.optional (packages != [ ]) installPackages
+      ++ lib.optional nixPackages installNixPackages
+      ++ cfg.ubuntu.runcmd ++ [
       # Only once every package is really there: runcmd carries on past a
       # failed step, and a failed install must be retried next boot.
-      [ "sh" "-c" "${lib.optionalString (packages != [ ]) "dpkg-query -W ${lib.escapeShellArgs packages} >/dev/null && "}mkdir -p ${dirOf provisioned} && touch ${provisioned}" ]
+      [ "sh" "-c" "${lib.optionalString (packages != [ ]) "dpkg-query -W ${lib.escapeShellArgs packages} >/dev/null && "}${lib.optionalString nixPackages "[ \"$(readlink ${nixProfile})\" = ${nixEnv} ] && "}mkdir -p ${dirOf provisioned} && touch ${provisioned}" ]
     ];
   }) cfg.ubuntu.cloudConfig;
 

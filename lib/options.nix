@@ -64,6 +64,17 @@ in
         default = [ ];
         description = "apt packages, installed by cloud-init on first boot.";
       };
+      nixPackages = mkOption {
+        type = types.listOf types.package;
+        default = [ ];
+        description = ''
+          Packages from this repo's pinned nixpkgs (the `pkgs` module
+          argument), for when Ubuntu's own are too old. Built on the host
+          and copied into the guest's /nix/store on first boot, before
+          `runcmd`, with their binaries linked into /usr/local/bin, which
+          comes before apt's /usr/bin on PATH. The guest doesn't need Nix.
+        '';
+      };
       runcmd = mkOption {
         type = types.listOf (types.either types.str (types.listOf types.str));
         default = [ ];

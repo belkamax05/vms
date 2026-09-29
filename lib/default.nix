@@ -26,11 +26,12 @@ rec {
   # that uses this one (see mkMachines); `vms` is this repo's root, handed
   # to every machine and plugin so one can import this repo's machines and
   # plugins by path: `imports = [ (vms + "/machines/ubuntu-gui.nix") ];`.
+  # `pkgs` is this repo's pinned nixpkgs, for `ubuntu.nixPackages`.
   mkMachine = name: file:
     let
       cfg = (lib.evalModules {
         modules = [ ./options.nix file { inherit name; } ];
-        specialArgs.vms = ../.;
+        specialArgs = { vms = ../.; inherit pkgs; };
       }).config;
 
       # Next to the machine's own file, so a repo that adds machines keeps

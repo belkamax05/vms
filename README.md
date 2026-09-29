@@ -74,6 +74,11 @@ OS-specific half for each OS it supports:
 
 - `ubuntu.packages`, `ubuntu.runcmd`, `ubuntu.writeFiles`, `ubuntu.cloudConfig`
   are cloud-init fragments that run on first boot.
+- `ubuntu.nixPackages` are packages from this repo's pinned nixpkgs (the `pkgs`
+  module argument), for when Ubuntu's are too old. Their closure is built on the
+  host and served like the `.deb`s, and first boot unpacks it into the guest's
+  `/nix/store` and links their binaries into `/usr/local/bin`. The guest doesn't
+  need Nix for that.
 - `nixos.modules` holds ordinary NixOS modules.
 
 The builder for the machine's own OS reads only its half. That lets one plugin
@@ -84,7 +89,8 @@ plugins, since list options from all of them concatenate.
 | --- | --- | --- |
 | `gui` | `ubuntu-desktop-minimal` (GNOME), autologin | GNOME + GDM, autologin |
 | `nix` | official multi-user installer, pinned, flakes on | flakes on (NixOS already has Nix) |
-| `git` | the `git` package, pinned by the lockfile | `programs.git` |
+| `git` | nixpkgs' `git` (`ubuntu.nixPackages`) | `programs.git` |
+| `zsh` | nixpkgs' `zsh`, the login shell | `programs.zsh`, the login shell |
 
 ## Extending it from another repo
 
