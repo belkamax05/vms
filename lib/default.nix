@@ -7,7 +7,8 @@
 #                VM_USER_KEY (the machine's own keypair, vm-ssh - private
 #                half, `.pub` beside it - installed as `user`'s
 #                ~/.ssh/id_ed25519 on every boot)
-#   meta         shell-sourceable facts about it (os, user, gui)
+#   meta         shell-sourceable facts about it (os, user, gui, and the
+#                apt packages `vm lock` resolves - none on NixOS)
 { nixpkgs, nixGL }:
 
 let
@@ -50,6 +51,7 @@ in
           os=${cfg.os}
           user=${cfg.user}
           gui=${lib.boolToString cfg.gui}
+          packages=${lib.escapeShellArg (lib.concatStringsSep " " (lib.unique cfg.ubuntu.packages))}
           EOF
         '';
 

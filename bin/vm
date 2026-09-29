@@ -6,6 +6,9 @@
 #                          terminal (serial console) or its own window (gui
 #                          machines); -d boots it in the background instead
 #   vm ssh <name> [cmd]    ssh in as the machine's user (waits for sshd)
+#   vm lock <name>         resolve the machine's apt packages into
+#                          machines/<name>.lock.json - every .deb with its
+#                          hash, which is all an Ubuntu machine installs from
 #   vm key <name>          the public half of the machine's own key, vm-ssh -
 #                          the guest user's ~/.ssh/id_ed25519, e.g. for GitHub
 #   vm down <name>         power it off, keep its disk for the next `up`
@@ -128,29 +131,141 @@ cmd_up() {
   fi
 }
 
+# ssh_opts STATE_DIR: the options that reach the guest booted from STATE_DIR.
+ssh_opts() {
+  opts=(
+    -i "$key" -p "$(cat "$1/ssh-port")"
+    -o IdentitiesOnly=yes -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5
+  )
+}
+
+# wait_ssh NAME STATE_DIR: retry while the guest is still booting (sshd not
+# up yet, or on Ubuntu, cloud-init not done creating the user): ssh's own
+# failures are 255. Needs `user` from the sourced meta and `opts`.
+wait_ssh() {
+  local tries=0 pid
+  # shellcheck disable=SC2154 # user comes from the sourced meta
+  until ssh "${opts[@]}" -o BatchMode=yes "$user@127.0.0.1" true 2>/dev/null; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 60 ] || die "no SSH after 5 minutes - see $2/console.log, or vm up without -d"
+    [ "$tries" = 1 ] && printf 'waiting for %s to come up...\n' "$1" >&2
+    pid="$(cat "$2/qemu.pid" 2>/dev/null)" || pid=''
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then die "$1 stopped while waiting"; fi
+    sleep 5
+  done
+}
+
 cmd_ssh() {
   need_machine "${1:-}"
   local name="$1"; shift
   pid_of "$name" >/dev/null || die "$name isn't running (vm up $name)"
   # shellcheck source=/dev/null
   . "$dir/runner/meta"
-  local opts=(
-    -i "$key" -p "$(cat "$dir/ssh-port")"
-    -o IdentitiesOnly=yes -o StrictHostKeyChecking=no
-    -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5
-  )
-  # Retry while the guest is still booting (sshd not up yet, or on Ubuntu,
-  # cloud-init not done creating the user): ssh's own failures are 255.
-  local tries=0
-  # shellcheck disable=SC2154 # user comes from the sourced meta
-  until ssh "${opts[@]}" -o BatchMode=yes "$user@127.0.0.1" true 2>/dev/null; do
-    tries=$((tries + 1))
-    [ "$tries" -lt 60 ] || die "no SSH after 5 minutes - see $dir/console.log, or vm up without -d"
-    [ "$tries" = 1 ] && printf 'waiting for %s to come up...\n' "$name" >&2
-    pid_of "$name" >/dev/null || die "$name stopped while waiting"
-    sleep 5
-  done
+  ssh_opts "$dir"
+  wait_ssh "$name" "$dir"
   exec ssh "${opts[@]}" "$user@127.0.0.1" "$@"
+}
+
+# `vm lock`: boot the machine's image as it starts out (its apt preferences,
+# nothing installed - VM_LOCK=1, see lib/ubuntu.nix) in a scratch state dir,
+# ask apt what installing its packages takes today, and write that down:
+# every .deb's pool path, file name and sha256, and the moment it was
+# resolved (the snapshot the build falls back to for a file the archive has
+# pruned since). The only step that resolves versions; everything after
+# installs from these hashes alone.
+cmd_lock() {
+  need_machine "${1:-}"
+  local name="$1" lock="$repo/machines/$1.lock.json"
+  mkdir -p "$dir"
+  [ -f "$key" ] || ssh-keygen -q -t ed25519 -N '' -C "vm@$(hostname)" -f "$key"
+  ensure_user_key "$name"
+  nix build "$repo#$name" --out-link "$dir/runner"
+  # shellcheck source=/dev/null
+  . "$dir/runner/meta"
+  # shellcheck disable=SC2154 # packages comes from the sourced meta
+  if [ -z "$packages" ]; then
+    printf '%s installs no apt packages - nothing to lock\n' "$name"
+    return 0
+  fi
+
+  # Global, not local: the EXIT trap below runs after this function returns.
+  lock_scratch="$dir/lock"
+  local scratch="$lock_scratch" port=2222
+  rm -rf "$scratch"
+  mkdir -p "$scratch"
+  while ! port_free "$port"; do port=$((port + 1)); done
+  printf '%s\n' "$port" > "$scratch/ssh-port"
+  trap 'kill "$(cat "$lock_scratch/qemu.pid" 2>/dev/null)" 2>/dev/null; rm -rf "$lock_scratch"' EXIT
+  VM_STATE="$scratch" VM_PUBKEY="$key.pub" VM_USER_KEY="$dir/vm-ssh" VM_SSH_PORT="$port" VM_LOCK=1 \
+    setsid "$dir/runner/bin/vm-run" </dev/null >"$scratch/console.log" 2>&1 &
+  local tries=0
+  until [ -s "$scratch/qemu.pid" ]; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 100 ] || die "no QEMU pid after 20s - see $scratch/console.log"
+    sleep 0.2
+  done
+
+  ssh_opts "$scratch"
+  wait_ssh "$name (lock)" "$scratch"
+  local snapshot
+  snapshot="$(date -u +%Y%m%dT%H%M%SZ)"
+  printf 'resolving %s...\n' "$packages" >&2
+  # apt's plan (--print-uris) names each .deb but carries only its MD5; the
+  # sha256 comes from the Packages indexes apt just fetched and verified
+  # against the signed InRelease. URIs are %-escaped (+ is %2b), index
+  # Filenames aren't. Out: "<pool path> <sha256>" per .deb.
+  # shellcheck disable=SC2086 # packages is a word list on purpose
+  ssh "${opts[@]}" "$user@127.0.0.1" bash -s -- $packages >"$scratch/resolved" <<'RESOLVE' ||
+set -e
+sudo cloud-init status --wait >/dev/null
+sudo apt-get -qq update >&2
+sudo apt-get -qq install --print-uris -y "$@" > /tmp/vms-uris
+awk -v q="'" '
+  function unescape(s,   out, i, c) {
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+      c = substr(s, i, 1)
+      if (c == "%") {
+        out = out sprintf("%c", (index("0123456789abcdef", tolower(substr(s, i + 1, 1))) - 1) * 16 \
+          + index("0123456789abcdef", tolower(substr(s, i + 2, 1))) - 1)
+        i += 2
+      } else out = out c
+    }
+    return out
+  }
+  $1 ~ /[.]deb.$/ { u = $1; gsub(q, "", u); sub(/^.*[/]pool[/]/, "pool/", u); print unescape(u) }
+' /tmp/vms-uris > /tmp/vms-want
+for f in $(apt-get indextargets --format '$(FILENAME)' 'Identifier: Packages'); do
+  /usr/lib/apt/apt-helper cat-file "$f"
+done | awk '/^Filename: /{fn=$2} /^SHA256: /{print fn, $2}' > /tmp/vms-hashes
+awk 'NR==FNR{h[$1]=$2; next} {print $1, ($1 in h ? h[$1] : "MISSING")}' /tmp/vms-hashes /tmp/vms-want
+RESOLVE
+    die "apt couldn't resolve $packages - see above"
+  if grep -q ' MISSING$' "$scratch/resolved"; then
+    die "no sha256 in apt's indexes for: $(grep ' MISSING$' "$scratch/resolved" | cut -d' ' -f1 | head -5 | tr '\n' ' ')"
+  fi
+
+  {
+    printf '{\n  "snapshot": "%s",\n  "packages": [' "$snapshot"
+    local sep='' p
+    for p in $packages; do printf '%s"%s"' "$sep" "$p"; sep=', '; done
+    printf '],\n  "debs": [\n'
+    awk '{
+      n = split($1, parts, "/")
+      printf "%s    { \"file\": \"%s\", \"path\": \"%s\", \"sha256\": \"%s\" }", (NR > 1 ? ",\n" : ""), parts[n], $1, $2
+    } END { if (NR) printf "\n" }' "$scratch/resolved"
+    printf '  ]\n}\n'
+  } >"$lock.tmp"
+  local count
+  count="$(grep -c '"file"' "$lock.tmp" || true)"
+  if [ "$count" = 0 ]; then
+    rm -f "$lock.tmp"
+    die "apt's plan for $packages had no .debs in it"
+  fi
+  mv "$lock.tmp" "$lock"
+  printf '%s: %s .debs locked in %s\n' "$name" "$count" "$lock"
+  printf 'the flake only sees tracked files: git add %s\n' "${lock#"$repo"/}"
 }
 
 stop() {
@@ -202,6 +317,7 @@ case "${1:-}" in
   up) shift; cmd_up "$@" ;;
   ssh) shift; cmd_ssh "$@" ;;
   key) shift; cmd_key "$@" ;;
+  lock) shift; cmd_lock "$@" ;;
   down) shift; cmd_down "$@" ;;
   kill) shift; cmd_kill "$@" ;;
   -h | --help | help) usage ;;

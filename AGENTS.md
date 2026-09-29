@@ -12,7 +12,9 @@ action. The user stages and commits everything themselves. See
 ## Invariants
 
 - **Guests stay raw.** `lib/ubuntu.nix` and `lib/nixos.nix` hold only what
-  it takes to log in (a user, SSH, console autologin). Anything else,
+  it takes to log in and to be reached (a user, SSH, console autologin, the
+  machine's own `vm-ssh` key) and to provision reproducibly (the apt
+  snapshot, resumable first boot). Anything else,
   including Nix on Ubuntu, a desktop, or dotfiles, goes in a `plugins/`
   file that a machine opts into. Never put it in a builder.
 - **One plugin file serves both OSes.** A plugin sets `ubuntu.*` and/or
@@ -24,7 +26,11 @@ action. The user stages and commits everything themselves. See
   so that `vm kill` removes it with a single `rm -rf`. Nothing may write
   outside it, except the shared `id_ed25519` keypair next to it.
 - **Pin every external input.** That covers the Ubuntu image (URL + hash),
-  the Nix installer version, and the flake inputs.
+  the apt snapshot (bumped with the image), every `.deb` an Ubuntu machine
+  installs (its `machines/<name>.lock.json`, from `vm lock` - re-run it when
+  a machine's packages or the snapshot change, and the user tracks it), the
+  Nix installer version, and the flake inputs. Snaps can't be pinned, so nothing may install one: keep
+  snap-installing stub debs (like `firefox`) out with an apt preference.
 - **`nix flake check` must pass, and must not build machines.** It only
   instantiates them. Keep `unsafeDiscardOutputDependency` in the
   `machines` check.
