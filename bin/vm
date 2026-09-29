@@ -6,12 +6,15 @@
 #                          terminal (serial console) or its own window (gui
 #                          machines); -d boots it in the background instead
 #   vm ssh <name> [cmd]    ssh in as the machine's user (waits for sshd)
+#   vm key <name>          the public half of the machine's own key, vm-ssh -
+#                          the guest user's ~/.ssh/id_ed25519, e.g. for GitHub
 #   vm down <name>         power it off, keep its disk for the next `up`
-#   vm kill <name>         power it off and delete everything it wrote
+#   vm kill <name>         power it off and delete everything it wrote,
+#                          vm-ssh included (and its GitHub copy, if gh can)
 #
-# Every machine's state - its disk overlay, seed, SSH port, console log and
-# a GC root for its build - lives in one directory, so `kill` is a single
-# rm -rf and leaves nothing behind on the host.
+# Every machine's state - its disk overlay, seed, SSH port, console log, its
+# vm-ssh key and a GC root for its build - lives in one directory, so `kill`
+# is a single rm -rf and leaves nothing behind on the host.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -46,6 +49,17 @@ pid_of() {
   printf '%s\n' "$pid"
 }
 
+# The machine's own keypair: generated once per machine, handed to the guest
+# user as ~/.ssh/id_ed25519 on every boot (see lib/default.nix, VM_USER_KEY),
+# and gone with the state dir on `vm kill`. Named vm-ssh - its comment, and
+# the title to give it on GitHub.
+ensure_user_key() {
+  mkdir -p "$dir"
+  [ -f "$dir/vm-ssh" ] && return 0
+  ssh-keygen -q -t ed25519 -N '' -C vm-ssh -f "$dir/vm-ssh"
+  printf '%s: new key vm-ssh - vm key %s prints it, to add on GitHub as vm-ssh\n' "$1" "$1" >&2
+}
+
 port_free() {
   ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
 }
@@ -75,6 +89,7 @@ cmd_up() {
 
   mkdir -p "$dir"
   [ -f "$key" ] || ssh-keygen -q -t ed25519 -N '' -C "vm@$(hostname)" -f "$key"
+  ensure_user_key "$name"
 
   nix build "$repo#$name" --out-link "$dir/runner"
 
@@ -84,7 +99,7 @@ cmd_up() {
     printf '%s\n' "$port" > "$dir/ssh-port"
   fi
 
-  export VM_STATE="$dir" VM_PUBKEY="$key.pub"
+  export VM_STATE="$dir" VM_PUBKEY="$key.pub" VM_USER_KEY="$dir/vm-ssh"
   VM_SSH_PORT="$(cat "$dir/ssh-port")"
   export VM_SSH_PORT
 
@@ -150,9 +165,35 @@ cmd_down() {
   stop "$1"
 }
 
+cmd_key() {
+  need_machine "${1:-}"
+  ensure_user_key "$1"
+  cat "$dir/vm-ssh.pub"
+}
+
+# `vm kill` deletes vm-ssh with everything else; a copy added to GitHub
+# would outlive it. With gh signed in and allowed to (scope admin:public_key),
+# that copy - the key whose text is exactly this one, nothing else - is
+# deleted too; without, it's named so it can be removed by hand.
+forget_user_key() {
+  [ -f "$dir/vm-ssh.pub" ] || return 0
+  local pub id
+  pub="$(cut -d' ' -f1,2 "$dir/vm-ssh.pub")"
+  if command -v gh >/dev/null 2>&1 &&
+    id="$(gh api user/keys --jq ".[] | select(.key == \"$pub\") | .id" 2>/dev/null)"; then
+    if [ -n "$id" ] && gh api -X DELETE "user/keys/$id" >/dev/null 2>&1; then
+      printf '%s: removed vm-ssh from GitHub\n' "$1" >&2
+    fi
+    return 0
+  fi
+  printf '%s: vm-ssh (%s) is deleted - if you added it to GitHub, remove it there too\n' \
+    "$1" "$(ssh-keygen -lf "$dir/vm-ssh.pub" | cut -d' ' -f2)" >&2
+}
+
 cmd_kill() {
   need_machine "${1:-}"
   stop "$1"
+  forget_user_key "$1"
   rm -rf "$dir"
 }
 
@@ -160,6 +201,7 @@ case "${1:-}" in
   ls) shift; cmd_ls "$@" ;;
   up) shift; cmd_up "$@" ;;
   ssh) shift; cmd_ssh "$@" ;;
+  key) shift; cmd_key "$@" ;;
   down) shift; cmd_down "$@" ;;
   kill) shift; cmd_kill "$@" ;;
   -h | --help | help) usage ;;

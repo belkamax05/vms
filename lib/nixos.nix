@@ -42,6 +42,21 @@ let
           settings.PasswordAuthentication = false;
           authorizedKeysFiles = [ "/run/vms/authorized_keys" ];
         };
+        # The machine's own keypair (vm-ssh), in over fw_cfg the same way
+        # and installed on every boot, so it's always the one `vm key`
+        # shows - and gone for good with the host's state dir.
+        systemd.services.vms-user-key = {
+          wantedBy = [ "multi-user.target" ];
+          after = [ "systemd-user-sessions.service" ];
+          serviceConfig.Type = "oneshot";
+          script = ''
+            fw=/sys/firmware/qemu_fw_cfg/by_name/opt/vms
+            ssh=/home/${cfg.user}/.ssh
+            install -d -m 700 -o ${cfg.user} -g users "$ssh"
+            install -m 600 -o ${cfg.user} -g users "$fw/user_key/raw" "$ssh/id_ed25519"
+            install -m 644 -o ${cfg.user} -g users "$fw/user_key_pub/raw" "$ssh/id_ed25519.pub"
+          '';
+        };
         systemd.services.vms-authorized-keys = {
           wantedBy = [ "sshd.service" ];
           before = [ "sshd.service" ];
@@ -63,7 +78,7 @@ mkRunner {
   script = ''
     export NIX_DISK_IMAGE="$VM_STATE/disk.qcow2"
     export QEMU_NET_OPTS="hostfwd=tcp:127.0.0.1:$VM_SSH_PORT-:22"
-    export QEMU_OPTS="-pidfile $VM_STATE/qemu.pid -fw_cfg name=opt/vms/authorized_keys,file=$VM_PUBKEY"
+    export QEMU_OPTS="-pidfile $VM_STATE/qemu.pid -fw_cfg name=opt/vms/authorized_keys,file=$VM_PUBKEY -fw_cfg name=opt/vms/user_key,file=$VM_USER_KEY -fw_cfg name=opt/vms/user_key_pub,file=$VM_USER_KEY.pub"
     cd "$VM_STATE"
     exec ${vm}/bin/run-${cfg.name}-vm
   '';

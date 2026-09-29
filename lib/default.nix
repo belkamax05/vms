@@ -2,8 +2,11 @@
 # OS, comes out with the same shape, which is all bin/vm relies on:
 #
 #   bin/vm-run   boots the machine; reads VM_STATE (its state dir),
-#                VM_SSH_PORT (host port forwarded to guest :22) and
-#                VM_PUBKEY (public key to authorize for `user`)
+#                VM_SSH_PORT (host port forwarded to guest :22),
+#                VM_PUBKEY (public key to authorize for `user`) and
+#                VM_USER_KEY (the machine's own keypair, vm-ssh - private
+#                half, `.pub` beside it - installed as `user`'s
+#                ~/.ssh/id_ed25519 on every boot)
 #   meta         shell-sourceable facts about it (os, user, gui)
 { nixpkgs, nixGL }:
 
