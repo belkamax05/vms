@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# vm - boot, reach and throw away the machines defined in machines/.
+#
+#   vm ls                  every machine, and whether it's running
+#   vm up [-d] <name>      build if needed, then boot - attached to this
+#                          terminal (serial console) or its own window (gui
+#                          machines); -d boots it in the background instead
+#   vm ssh <name> [cmd]    ssh in as the machine's user (waits for sshd)
+#   vm down <name>         power it off, keep its disk for the next `up`
+#   vm kill <name>         power it off and delete everything it wrote
+#
+# Every machine's state - its disk overlay, seed, SSH port, console log and
+# a GC root for its build - lives in one directory, so `kill` is a single
+# rm -rf and leaves nothing behind on the host.
+set -euo pipefail
+
+repo="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+state_root="${XDG_STATE_HOME:-$HOME/.local/state}/vms"
+key="$state_root/id_ed25519"
+
+die() { printf 'vm: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  sed -n '2,/^$/{s/^# \{0,1\}//;p}' "$0" | sed '/^$/d'
+  exit "${1:-0}"
+}
+
+machines() {
+  for f in "$repo"/machines/*.nix; do
+    basename "$f" .nix
+  done | sort
+}
+
+need_machine() {
+  [ -n "${1:-}" ] || usage 1
+  [ -f "$repo/machines/$1.nix" ] || die "no machine '$1' (see: vm ls)"
+  dir="$state_root/$1"
+}
+
+pid_of() {
+  local pidfile="$state_root/$1/qemu.pid"
+  [ -f "$pidfile" ] || return 1
+  local pid
+  pid="$(cat "$pidfile")"
+  kill -0 "$pid" 2>/dev/null || return 1
+  printf '%s\n' "$pid"
+}
+
+port_free() {
+  ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+}
+
+cmd_ls() {
+  local m status pid
+  for m in $(machines); do
+    if pid="$(pid_of "$m")"; then
+      status="running  ssh :$(cat "$state_root/$m/ssh-port")  pid $pid"
+    elif [ -d "$state_root/$m" ]; then
+      status="stopped  (disk kept - vm kill $m to drop it)"
+    else
+      status="-"
+    fi
+    printf '%-14s %s\n' "$m" "$status"
+  done
+}
+
+cmd_up() {
+  local detach=0
+  if [ "${1:-}" = -d ]; then detach=1; shift; fi
+  need_machine "${1:-}"
+  local name="$1"
+  if pid_of "$name" >/dev/null; then
+    die "$name is already running (vm ssh $name, or vm down $name)"
+  fi
+
+  mkdir -p "$dir"
+  [ -f "$key" ] || ssh-keygen -q -t ed25519 -N '' -C "vm@$(hostname)" -f "$key"
+
+  nix build "$repo#$name" --out-link "$dir/runner"
+
+  if [ ! -f "$dir/ssh-port" ] || ! port_free "$(cat "$dir/ssh-port")"; then
+    local port=2222
+    while ! port_free "$port"; do port=$((port + 1)); done
+    printf '%s\n' "$port" > "$dir/ssh-port"
+  fi
+
+  export VM_STATE="$dir" VM_PUBKEY="$key.pub"
+  VM_SSH_PORT="$(cat "$dir/ssh-port")"
+  export VM_SSH_PORT
+
+  # shellcheck source=/dev/null
+  . "$dir/runner/meta"
+  if [ "$detach" = 1 ]; then
+    rm -f "$dir/qemu.pid"
+    setsid "$dir/runner/bin/vm-run" </dev/null >"$dir/console.log" 2>&1 &
+    # Back only once QEMU has written its pidfile, so an immediate
+    # `vm ssh`/`vm ls` sees it running rather than stopped.
+    local launcher=$! tries=0
+    until pid_of "$name" >/dev/null; do
+      kill -0 "$launcher" 2>/dev/null || die "$name failed to start - see $dir/console.log"
+      tries=$((tries + 1))
+      [ "$tries" -lt 100 ] || die "$name has no QEMU pid after 20s - see $dir/console.log"
+      sleep 0.2
+    done
+    printf '%s booting in the background - console: %s\n' "$name" "$dir/console.log"
+    printf 'vm ssh %s   to get in (waits for it to come up)\n' "$name"
+  else
+    # shellcheck disable=SC2154 # gui comes from the sourced meta
+    if [ "$gui" = false ]; then
+      printf 'Serial console - Ctrl-a x powers the VM off. vm ssh %s works from another terminal.\n' "$name"
+    fi
+    exec "$dir/runner/bin/vm-run"
+  fi
+}
+
+cmd_ssh() {
+  need_machine "${1:-}"
+  local name="$1"; shift
+  pid_of "$name" >/dev/null || die "$name isn't running (vm up $name)"
+  # shellcheck source=/dev/null
+  . "$dir/runner/meta"
+  local opts=(
+    -i "$key" -p "$(cat "$dir/ssh-port")"
+    -o IdentitiesOnly=yes -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5
+  )
+  # Retry while the guest is still booting (sshd not up yet, or on Ubuntu,
+  # cloud-init not done creating the user): ssh's own failures are 255.
+  local tries=0
+  # shellcheck disable=SC2154 # user comes from the sourced meta
+  until ssh "${opts[@]}" -o BatchMode=yes "$user@127.0.0.1" true 2>/dev/null; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 60 ] || die "no SSH after 5 minutes - see $dir/console.log, or vm up without -d"
+    [ "$tries" = 1 ] && printf 'waiting for %s to come up...\n' "$name" >&2
+    pid_of "$name" >/dev/null || die "$name stopped while waiting"
+    sleep 5
+  done
+  exec ssh "${opts[@]}" "$user@127.0.0.1" "$@"
+}
+
+stop() {
+  local pid
+  pid="$(pid_of "$1")" || return 0
+  kill "$pid"
+  while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
+}
+
+cmd_down() {
+  need_machine "${1:-}"
+  stop "$1"
+}
+
+cmd_kill() {
+  need_machine "${1:-}"
+  stop "$1"
+  rm -rf "$dir"
+}
+
+case "${1:-}" in
+  ls) shift; cmd_ls "$@" ;;
+  up) shift; cmd_up "$@" ;;
+  ssh) shift; cmd_ssh "$@" ;;
+  down) shift; cmd_down "$@" ;;
+  kill) shift; cmd_kill "$@" ;;
+  -h | --help | help) usage ;;
+  *) usage 1 ;;
+esac
