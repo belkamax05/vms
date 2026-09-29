@@ -18,7 +18,7 @@ import { dirname, join, resolve } from 'node:path';
 
 import { VmError } from '../errors';
 import { accountName, addKey, authorize, GhAccessError, removeKey } from '../github';
-import { lockFile, type Repo, sharedKey, stateDir } from '../repo';
+import { lockFile, machineSource, type Repo, sharedKey, stateDir } from '../repo';
 
 export { VmError };
 
@@ -246,9 +246,39 @@ export const firstFreePort = async (from = 2222) => {
  * `onOutput` given, nix's output is read line by line (the dashboard's status line) and its
  * tail is what a failure reports; left off, nix draws its own progress on the terminal.
  */
+/**
+ * The repo as a flake reference: git+file when it's a git checkout, so its submodules come
+ * along. VMS_FLAKE overrides it - `VMS_FLAKE=path:$PWD vm ...` sees files git doesn't track yet,
+ * for trying a change before committing it.
+ */
+export const flakeRef = (repo: Repo) =>
+  process.env.VMS_FLAKE ||
+  (existsSync(join(repo.root, '.git')) ? `git+file://${repo.root}` : `path:${repo.root}`);
+
+/**
+ * What `nix build` builds for the machine: the repo's own package, or - for a wizard recipe,
+ * which lives outside the repo - that recipe against the repo's catalog (`lib.recipeMachine`),
+ * which needs --impure to read it.
+ */
+const buildTarget = (repo: Repo, name: string): string[] => {
+  const source = machineSource(repo, name);
+  if (source?.kind !== 'mine') return [`${flakeRef(repo)}#${name}`];
+  const flake = `builtins.getFlake ${JSON.stringify(flakeRef(repo))}`;
+  return [
+    '--impure',
+    '--expr',
+    `(${flake}).lib.recipeMachine ${JSON.stringify(name)} (/. + ${JSON.stringify(source.path)})`,
+  ];
+};
+
 export const build = (repo: Repo, name: string, onOutput?: Log) =>
   new Promise<void>((resolve, reject) => {
-    const args = ['build', `${repo.root}#${name}`, '--out-link', join(stateDir(name), 'runner')];
+    const args = [
+      'build',
+      ...buildTarget(repo, name),
+      '--out-link',
+      join(stateDir(name), 'runner'),
+    ];
     if (!onOutput) {
       const result = spawnSync('nix', args, { stdio: 'inherit' });
       if (result.status === 0) resolve();

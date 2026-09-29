@@ -21,6 +21,9 @@ let
   # auto-detecting default, evaluates without --impure.
   nixGLMesa = nixGL.packages.x86_64-linux.nixGLIntel;
 
+  catalogLib = import ./catalog.nix { inherit lib; };
+  recipeModule = import ./recipe.nix { inherit lib; };
+
   # Guest -> host requests: a virtio-serial port, /dev/virtio-ports/vms.host
   # in the guest (root-only there - a plugin writes it with sudo), whose
   # output lands in $VM_STATE/host-requests. `start` follows that file for
@@ -52,16 +55,19 @@ rec {
   # to every machine and plugin so one can import this repo's machines and
   # plugins by path: `imports = [ (vms + "/machines/ubuntu-gui.nix") ];`.
   # `pkgs` is this repo's pinned nixpkgs, for `ubuntu.nixPackages`.
-  mkMachine = name: file:
+  mkMachine = name: file: mkMachineFrom { inherit name; module = file; dir = dirOf file; };
+
+  # The machine behind both mkMachine and mkRecipeMachine: `module` is what
+  # it is, `dir` where its lockfile lives - next to its own file, so a repo
+  # that adds machines keeps their lockfiles too (`vm lock` writes it there).
+  mkMachineFrom = { name, module, dir }:
     let
       cfg = (lib.evalModules {
-        modules = [ ./options.nix file { inherit name; } ];
+        modules = [ ./options.nix module { inherit name; } ];
         specialArgs = { vms = ../.; inherit pkgs; };
       }).config;
 
-      # Next to the machine's own file, so a repo that adds machines keeps
-      # their lockfiles too - `vm lock` writes it there.
-      lockFile = dirOf file + "/${name}.lock.json";
+      lockFile = dir + "/${name}.lock.json";
 
       mkRunner = { script, runtimeInputs ? [ ] }:
         let
@@ -103,6 +109,32 @@ rec {
       (mkMachine (lib.removeSuffix ".nix" file) (dir + "/${file}")))
     (lib.filterAttrs (file: type: type == "regular" && lib.hasSuffix ".nix" file)
       (builtins.readDir dir));
+
+  # The catalog recipes are made from (lib/catalog.nix), with `extend` for a
+  # repo that adds its own entries, and `info` - plain data - for `vm`.
+  catalog = catalogLib.catalog;
+  extendCatalog = catalogLib.extend;
+  catalogInfo = catalogLib.info;
+
+  # A recipe file (JSON, lib/recipe.nix) -> a runner, like mkMachine. `file`
+  # may be anywhere - `vm new` keeps its recipes out of the repo, in
+  # ~/.config/vms, and builds them with --impure - and its lockfile sits
+  # next to it.
+  mkRecipeMachine = catalog: name: file: mkMachineFrom {
+    inherit name;
+    module = recipeModule catalog (builtins.fromJSON (builtins.readFile file));
+    dir = dirOf file;
+  };
+
+  # A repo's recipes/<name>.json -> { <name> = package; }, like mkMachines:
+  # recipes checked in, next to their lockfiles.
+  mkRecipes = catalog: dir:
+    if !builtins.pathExists dir then { }
+    else lib.mapAttrs'
+      (file: _: lib.nameValuePair (lib.removeSuffix ".json" file)
+        (mkRecipeMachine catalog (lib.removeSuffix ".json" file) (dir + "/${file}")))
+      (lib.filterAttrs (file: type: type == "regular" && lib.hasSuffix ".json" file && !lib.hasSuffix ".lock.json" file)
+        (builtins.readDir dir));
 
   # `nix flake check` for a set of machines: every one evaluates, none is
   # built (building them all would download the Ubuntu image and a GNOME

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 /** This repo's root - apps/vm/src/core/repo, five levels down. Holds `bin/vm`. */
 export const VMS_ROOT = resolve(import.meta.dir, '../../../../..');
@@ -28,21 +28,68 @@ export const currentRepo = (): Repo => {
 
 export const machinesDir = (repo: Repo) => join(repo.root, 'machines');
 
-export const machineFile = (repo: Repo, name: string) => join(machinesDir(repo), `${name}.nix`);
+/** Recipes checked into the repo, next to their lockfiles - see lib/recipe.nix. */
+export const recipesDir = (repo: Repo) => join(repo.root, 'recipes');
 
-export const lockFile = (repo: Repo, name: string) => join(machinesDir(repo), `${name}.lock.json`);
+/**
+ * The wizard's own recipes (`vm new`) for this repo: out of it, so a new machine needs no
+ * `git add` - `vm` builds them with --impure against the repo's catalog. They outlive `vm kill`;
+ * `vm forget` deletes one.
+ */
+export const myRecipesDir = (repo: Repo) =>
+  join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'vms', repo.name, 'recipes');
 
-/** machines/<name>.nix, sorted - the directory is the registry. */
-export const machineNames = (repo: Repo): string[] => {
-  const dir = machinesDir(repo);
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((file) => file.endsWith('.nix'))
-    .map((file) => file.slice(0, -'.nix'.length))
-    .sort();
+/**
+ * Where a machine is defined: a hand-written module (machines/<name>.nix), a recipe in the repo
+ * (recipes/<name>.json) or one of the wizard's (myRecipesDir). One name, one definition - on a
+ * clash the first of those wins.
+ */
+export interface MachineSource {
+  name: string;
+  kind: 'module' | 'recipe' | 'mine';
+  path: string;
+}
+
+const listDir = (dir: string, suffix: string) =>
+  existsSync(dir)
+    ? readdirSync(dir)
+        .filter((file) => file.endsWith(suffix) && !file.endsWith('.lock.json'))
+        .map((file) => ({ name: file.slice(0, -suffix.length), path: join(dir, file) }))
+    : [];
+
+export const machineSources = (repo: Repo): MachineSource[] => {
+  const seen = new Set<string>();
+  const sources: MachineSource[] = [];
+  for (const [kind, dir, suffix] of [
+    ['module', machinesDir(repo), '.nix'],
+    ['recipe', recipesDir(repo), '.json'],
+    ['mine', myRecipesDir(repo), '.json'],
+  ] as const) {
+    for (const entry of listDir(dir, suffix)) {
+      if (seen.has(entry.name)) continue;
+      seen.add(entry.name);
+      sources.push({ ...entry, kind });
+    }
+  }
+  return sources.sort((a, b) => a.name.localeCompare(b.name));
 };
 
-export const hasMachine = (repo: Repo, name: string) => existsSync(machineFile(repo, name));
+export const machineSource = (repo: Repo, name: string) =>
+  machineSources(repo).find((source) => source.name === name);
+
+/** The file that defines the machine. */
+export const machineFile = (repo: Repo, name: string) =>
+  machineSource(repo, name)?.path ?? join(machinesDir(repo), `${name}.nix`);
+
+/** Next to the machine's own file - `vm lock` writes it there. */
+export const lockFile = (repo: Repo, name: string) =>
+  join(dirname(machineFile(repo, name)), `${name}.lock.json`);
+
+/** Every machine, sorted - the directories are the registry. */
+export const machineNames = (repo: Repo): string[] =>
+  machineSources(repo).map((source) => source.name);
+
+export const hasMachine = (repo: Repo, name: string) => Boolean(machineSource(repo, name));
 
 /**
  * Every machine's host state - disk overlay, seed, SSH port, console log, its vm-ssh key and a

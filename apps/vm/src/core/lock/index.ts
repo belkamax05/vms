@@ -15,7 +15,7 @@ import {
   VmError,
   waitSsh,
 } from '../machine';
-import { lockFile, type Repo, stateDir } from '../repo';
+import { lockFile, machineSource, type Repo, stateDir } from '../repo';
 
 const RESOLVE = readFileSync(join(import.meta.dir, 'resolve.sh'), 'utf8');
 
@@ -53,6 +53,13 @@ const snapshotNow = () =>
     .replace(/[-:]/g, '')
     .replace(/\.\d+Z$/, 'Z');
 
+/**
+ * A lockfile the flake can't see yet: inside the repo but not tracked. A wizard recipe's lives
+ * outside it and is read --impure, so it never needs `git add`.
+ */
+const invisible = (repo: Repo, name: string, path: string) =>
+  machineSource(repo, name)?.kind !== 'mine' && !isTracked(repo, path);
+
 const isTracked = (repo: Repo, path: string) =>
   spawnSync('git', ['-C', repo.root, 'ls-files', '--error-unmatch', relative(repo.root, path)], {
     stdio: 'ignore',
@@ -70,7 +77,7 @@ export const ensureLocked = async (repo: Repo, name: string, log: Log, onOutput?
   if (existsSync(target) && !isLockStale(target, meta)) return;
   log(`${name}: its apt packages changed since the lockfile - locking them again...`);
   await lock(repo, name, log, onOutput);
-  if (!isTracked(repo, target)) {
+  if (invisible(repo, name, target)) {
     throw new VmError(
       `${name}: new ${relative(repo.root, target)} - the flake only sees tracked files: git add it, then up again`,
     );
@@ -158,7 +165,7 @@ export const lock = async (repo: Repo, name: string, log: Log, onOutput?: Log) =
     writeFileSync(`${target}.tmp`, formatLock(snapshot, packages, debs));
     renameSync(`${target}.tmp`, target);
     log(`${name}: ${debs.length} .debs locked in ${target}`);
-    if (!isTracked(repo, target)) {
+    if (invisible(repo, name, target)) {
       log(`the flake only sees tracked files: git add ${relative(repo.root, target)}`);
     }
   } finally {

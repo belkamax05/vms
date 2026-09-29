@@ -38,6 +38,7 @@ borrow the whole terminal and come back to it after. Its first run does
 ## Layout
 
 ```
+recipes/          machines as JSON recipes (see below), lockfiles beside them
 bin/vm            the host command (a shim for apps/vm); mr's link_bins puts it on PATH
 apps/vm/          the command itself: src/run.ts (scripted commands),
                   src/core (machines, lock), src/ui (the dashboard)
@@ -49,6 +50,8 @@ machines/         one file per machine, auto-discovered - no registry
 plugins/          optional layers a machine imports
 lib/
 ├── options.nix   the contract machines and plugins are written against
+├── catalog.nix   what recipes are made of - the wizard's choices
+├── recipe.nix    a recipe (JSON) -> a machine module
 ├── default.nix   evaluates a machine, wraps it in a uniform runner
 ├── ubuntu.nix    stock cloud image + a cloud-init seed built from the options
 └── nixos.nix     NixOS's own VM runner (what `nixos-rebuild build-vm` uses)
@@ -96,6 +99,32 @@ plugins, since list options from all of them concatenate.
 | `repos` | `repos = [ { url; dir; } ]` cloned on desktop login, once the machine's vm-ssh key is on GitHub | the same |
 | `direnv` | direnv + nix-direnv from nixpkgs, zsh hook, `direnv.trusted` folders | `programs.direnv`, the same |
 | `zoxide` | zoxide from nixpkgs, zsh hook | `programs.zoxide` |
+
+## Recipes and the wizard
+
+Most machines are combinations: an OS, maybe a desktop, some features, some
+tools. Rather than a file per combination, a machine can be a **recipe** -
+plain JSON - made from the **catalog** (`lib/catalog.nix`: OSes, desktops,
+features with what they require, suggested tools):
+
+```json
+{ "os": "ubuntu", "desktop": "gnome", "features": ["git", "direnv"], "tools": ["bun"], "memory": 8192 }
+```
+
+`lib/recipe.nix` turns it into a machine module: features pull in what they
+require on that OS (direnv on Ubuntu brings Nix and zsh), and a combination
+that can't work fails with the reason. `vm catalog` lists what's there.
+
+- `recipes/<name>.json` in a repo are machines like `machines/<name>.nix`,
+  lockfiles beside them.
+- `vm new <name>` (or `[n]` in the dashboard, a step-by-step wizard) writes
+  one to `~/.config/vms/<repo>/recipes/` - outside the repo, so a new machine
+  needs no `git add`; `vm` builds it with `--impure` against the repo's
+  catalog. It starts blank or from any recipe machine, and outlives
+  `vm kill`; `vm forget` (`[f]`) deletes it.
+
+`VMS_FLAKE=path:$PWD vm ...` makes `vm` read the repo's files as they are,
+untracked ones included - for trying a change before committing it.
 
 ## Extending it from another repo
 

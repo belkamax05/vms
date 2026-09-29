@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { relative } from 'node:path';
 
 import { Text, useInput } from 'ink';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import Box from '@/dev-tools/ui/components/Box';
 import LinkRow from '@/dev-tools/ui/components/LinkRow';
@@ -26,7 +26,8 @@ import {
   upDetached,
 } from '../../../core/machine';
 import { ensureLocked } from '../../../core/lock';
-import { lockFile, machineFile, type Repo, VM_BIN } from '../../../core/repo';
+import { forgetRecipe } from '../../../core/recipes';
+import { lockFile, machineFile, machineSource, type Repo, VM_BIN } from '../../../core/repo';
 import copyToClipboard from '../../clipboard';
 import type { Handoff, Session, Tone } from '../../types';
 
@@ -40,6 +41,11 @@ export interface MachinesViewProps {
   onSelect: (name: string) => void;
   onHandoff: (intent: Handoff) => void;
   onCaptureInput: (captured: boolean) => void;
+  /** Open the New machine wizard, starting from `from` when given. */
+  onNew: (from?: string) => void;
+  /** A machine to boot as soon as it's listed (the wizard's Create & up). */
+  bootNext?: string;
+  onBooted: () => void;
 }
 
 /** How much of console.log the detail pane shows - its end, where a failure is. */
@@ -86,6 +92,9 @@ export const MachinesView = ({
   onSelect,
   onHandoff,
   onCaptureInput,
+  onNew,
+  bootNext,
+  onBooted,
 }: MachinesViewProps) => {
   const colors = useColors();
   const prompt = usePrompt(onCaptureInput);
@@ -258,6 +267,37 @@ export const MachinesView = ({
     });
   };
 
+  /** The wizard, from this machine when it's a recipe - a hand-written one can't be copied. */
+  const newMachine = (status: MachineStatus | undefined) => {
+    if (working) return;
+    const source = status && machineSource(repo, status.name);
+    onNew(source && source.kind !== 'module' ? status?.name : undefined);
+  };
+
+  const forget = (status: MachineStatus | undefined) => {
+    if (!status || working || machineSource(repo, status.name)?.kind !== 'mine') return;
+    prompt.confirm(
+      `Forget ${status.name}? Its recipe is deleted; the machine is already gone.`,
+      () => {
+        try {
+          forgetRecipe(repo, status.name);
+          notify(`${status.name} forgotten`, 'ok');
+        } catch (error) {
+          fail(status.name, error);
+        }
+        reload();
+      },
+    );
+  };
+
+  // The wizard's Create & up: boot it once the list has it.
+  useEffect(() => {
+    const status = bootNext && statuses.find((entry) => entry.name === bootNext);
+    if (!status || working) return;
+    onBooted();
+    up(status);
+  });
+
   const copyKey = (status: MachineStatus | undefined) => {
     if (!status?.publicKey) return;
     copyToClipboard(status.publicKey);
@@ -318,6 +358,8 @@ export const MachinesView = ({
       else if (input === 'l') relock(current);
       else if (input === 'k') rotateKey(current);
       else if (input === 'y') copyKey(current);
+      else if (input === 'n') newMachine(current);
+      else if (input === 'f') forget(current);
       else if (input === 'g') addToGithub(current);
       else if (input === 'e') exportKey(current);
       else if (input === 'i') importKey(current);
@@ -347,8 +389,11 @@ export const MachinesView = ({
       actions.push({ hotkey: 'e', label: 'Export key', onPress: () => exportKey(status) });
     }
     actions.push({ hotkey: 'i', label: 'Import key', onPress: () => importKey(status) });
+    actions.push({ hotkey: 'n', label: 'New', onPress: () => newMachine(status) });
     if (status.state !== 'absent') {
       actions.push({ hotkey: 'x', label: 'Kill', onPress: () => destroy(status), tone: 'danger' });
+    } else if (machineSource(repo, status.name)?.kind === 'mine') {
+      actions.push({ hotkey: 'f', label: 'Forget', onPress: () => forget(status), tone: 'danger' });
     }
     return actions.map((action) => ({ ...action, disabled: Boolean(working) }));
   };
@@ -370,7 +415,7 @@ export const MachinesView = ({
         emptyText={
           isLoading && !statuses.length
             ? 'Reading machines/…'
-            : `No machines in ${repo.root}/machines.`
+            : `No machines in ${repo.name} yet - [n] makes one.`
         }
         detailTitle={current?.name ?? 'Machine'}
         reservedChrome={['viewHeader']}

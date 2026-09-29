@@ -12,10 +12,12 @@ import { nextThemeId } from '@/dev-tools/ui/theme';
 
 import type { VmConfig } from '../../config/settings';
 import { machineStatus } from '../../core/machine';
+import { type Catalog, loadCatalog } from '../../core/recipes';
 import { machineNames, type Repo } from '../../core/repo';
 import vmTheme from '../theme';
 import type { Handoff, Session, Tone } from '../types';
 import MachinesView from '../views/MachinesView';
+import WizardView from '../views/WizardView';
 
 type TabId = 'machines';
 
@@ -81,6 +83,18 @@ export const App = ({
     notice ? { text: notice, tone: 'info' } : undefined,
   );
   const [footerHint, setFooterHint] = useState<string | null>(null);
+  /** The New machine wizard, while it's open: the repo's catalog, and a machine to start from. */
+  const [wizard, setWizard] = useState<{ catalog: Catalog; from?: string } | undefined>();
+  /** A machine the wizard just made with Create & up - MachinesView boots it once it's listed. */
+  const [bootNext, setBootNext] = useState<string | undefined>();
+
+  const openWizard = (from?: string) => {
+    try {
+      setWizard({ catalog: loadCatalog(repo), from });
+    } catch (error) {
+      setStatus({ text: error instanceof Error ? error.message : String(error), tone: 'error' });
+    }
+  };
 
   const snapshot = useLoader(
     () => machineNames(repo).map((name) => machineStatus(repo, name)),
@@ -114,6 +128,7 @@ export const App = ({
 
   useInput(
     (input) => {
+      if (wizard) return;
       if (input === 'q' || input === 'Q') exit();
       else if (input === 'r' || input === 'R') refresh();
       else if (input === 't' || input === 'T') cycleTheme();
@@ -163,17 +178,41 @@ export const App = ({
       footerActions={footerActions}
       onHoverFooterAction={(action) => setFooterHint(action?.tooltip ?? null)}
     >
-      <MachinesView
-        repo={repo}
-        statuses={statuses}
-        isLoading={snapshot.isLoading}
-        session={session}
-        notify={notify}
-        reload={reload}
-        onSelect={onSelect}
-        onHandoff={handoff}
-        onCaptureInput={setIsInputCaptured}
-      />
+      {wizard ? (
+        <WizardView
+          repo={repo}
+          catalog={wizard.catalog}
+          from={wizard.from}
+          onCancel={() => setWizard(undefined)}
+          onCreated={(name, up) => {
+            setWizard(undefined);
+            session.selected = name;
+            onSelect(name);
+            setStatus({
+              text: `${name} created${up ? ' - starting it' : ' - [u] boots it'}`,
+              tone: 'ok',
+            });
+            if (up) setBootNext(name);
+            reload();
+          }}
+          onCaptureInput={setIsInputCaptured}
+        />
+      ) : (
+        <MachinesView
+          repo={repo}
+          statuses={statuses}
+          isLoading={snapshot.isLoading}
+          session={session}
+          notify={notify}
+          reload={reload}
+          onSelect={onSelect}
+          onHandoff={handoff}
+          onCaptureInput={setIsInputCaptured}
+          onNew={openWizard}
+          bootNext={bootNext}
+          onBooted={() => setBootNext(undefined)}
+        />
+      )}
     </AppShell>
   );
 };

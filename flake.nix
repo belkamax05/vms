@@ -15,14 +15,22 @@
     let
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
       vmsLib = import ./lib { inherit nixpkgs nixGL; };
-      machines = vmsLib.mkMachines ./machines;
+      machines = vmsLib.mkMachines ./machines // vmsLib.mkRecipes vmsLib.catalog ./recipes;
     in
     {
       # For repos that extend this one (e.g. vms-dfs, with this repo as a
       # submodule): `packages = vms.lib.mkMachines ./machines;` builds their
       # own machines/ the same way, and their machines import this repo's
       # machines and plugins through the `vms` module argument.
-      lib = { inherit (vmsLib) mkMachine mkMachines mkMachinesCheck; };
+      # recipeMachine and catalogInfo are what `vm` calls: a recipe from
+      # anywhere (--impure) built against this repo's catalog, and that
+      # catalog as data. An extending repo exposes its own, from its catalog.
+      lib = {
+        inherit (vmsLib) mkMachine mkMachines mkMachinesCheck mkRecipeMachine mkRecipes;
+        inherit (vmsLib) catalog extendCatalog catalogInfo;
+        recipeMachine = vmsLib.mkRecipeMachine vmsLib.catalog;
+        info = vmsLib.catalogInfo vmsLib.catalog;
+      };
 
       packages.x86_64-linux = machines;
 

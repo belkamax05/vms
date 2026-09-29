@@ -14,6 +14,16 @@ import {
   upDetached,
   VmError,
 } from './core/machine';
+import {
+  blankRecipe,
+  forgetRecipe,
+  loadCatalog,
+  nameProblem,
+  type Recipe,
+  readRecipe,
+  recipeProblems,
+  saveRecipe,
+} from './core/recipes';
 import { currentRepo, hasMachine, machineNames, type Repo } from './core/repo';
 
 const HELP = `vm - boot, reach and throw away the machines defined in machines/
@@ -37,6 +47,15 @@ usage:
                          key GitHub accepts outlives \`vm kill\`
   vm key <name> --import <file>
                          make a backed-up private key its vm-ssh
+  vm new <name> [--from <machine>] [--os <os>] [--desktop <desktop>|none]
+         [--features a,b] [--without a,b] [--tools a,b]
+         [--cpus N] [--memory MiB] [--disk MiB]
+                         a new machine from the catalog (vm catalog) - a recipe
+                         in ~/.config/vms/<repo>/recipes, no git add needed;
+                         the dashboard's [n] is the same as a wizard
+  vm forget <name>       delete a vm new machine's recipe (after vm kill)
+  vm catalog             what recipes can be made of: OSes, desktops,
+                         features, suggested tools
   vm down <name>         power it off, keep its disk for the next \`up\`
   vm kill <name>         power it off and delete everything it wrote, vm-ssh
                          included (and its GitHub copy, if gh can - unless
@@ -137,6 +156,84 @@ export const run = async (...argv: string[]) => {
         } else {
           console.log(publicKey(name, log));
         }
+        return;
+      }
+      case 'new': {
+        const [name, ...flags] = rest;
+        if (!name)
+          throw new VmError('usage: vm new <name> [--from <machine>] [--os ...] - see vm help');
+        const problem = nameProblem(repo, name);
+        if (problem) throw new VmError(`can't call it ${name}: ${problem}`);
+        const catalog = loadCatalog(repo);
+        const option = (flag: string) => {
+          const at = flags.indexOf(flag);
+          return at >= 0 ? flags[at + 1] : undefined;
+        };
+        const list = (flag: string) => (option(flag) ?? '').split(',').filter(Boolean);
+        const number = (flag: string) => {
+          const value = option(flag);
+          if (value === undefined) return undefined;
+          if (!/^\d+$/.test(value)) throw new VmError(`${flag} takes a number, not ${value}`);
+          return Number(value);
+        };
+        const from = option('--from');
+        let recipe: Recipe;
+        if (from) {
+          const base = readRecipe(repo, from);
+          if (!base)
+            throw new VmError(`${from} has no recipe to start from (a hand-written machine?)`);
+          recipe = { ...base };
+        } else recipe = blankRecipe(catalog);
+        const os = option('--os');
+        if (os) recipe.os = os;
+        const desktop = option('--desktop');
+        if (desktop) recipe.desktop = desktop === 'none' ? null : desktop;
+        const without = new Set(list('--without'));
+        recipe.features = [...new Set([...(recipe.features ?? []), ...list('--features')])].filter(
+          (id) => !without.has(id),
+        );
+        recipe.tools = [...new Set([...(recipe.tools ?? []), ...list('--tools')])];
+        for (const [flag, key] of [
+          ['--cpus', 'cpus'],
+          ['--memory', 'memory'],
+          ['--disk', 'diskSize'],
+        ] as const) {
+          const value = number(flag);
+          if (value !== undefined) recipe[key] = value;
+        }
+        const problems = recipeProblems(catalog, recipe);
+        if (problems.length) throw new VmError(`that recipe can't build: ${problems.join('; ')}`);
+        log(`${name}: ${saveRecipe(repo, name, recipe)}`);
+        log(`vm up ${name} to boot it`);
+        return;
+      }
+      case 'forget':
+        forgetRecipe(repo, needMachine(repo, rest[0]));
+        log(`${rest[0]}: recipe deleted`);
+        return;
+      case 'catalog': {
+        const catalog = loadCatalog(repo);
+        const line = (id: string, label: string, note = '') =>
+          console.log(`  ${id.padEnd(14)} ${label}${note ? ` - ${note}` : ''}`);
+        console.log('os:');
+        for (const [id, os] of Object.entries(catalog.os)) line(id, os.label);
+        console.log('desktops:');
+        for (const [id, d] of Object.entries(catalog.desktops)) line(id, d.label, d.os.join(', '));
+        console.log('features:');
+        for (const [id, f] of Object.entries(catalog.features)) {
+          const needs = [
+            ...(f.requires ?? []),
+            ...Object.entries(f.requiresOn ?? {}).map(([os, ids]) => `${ids.join('+')} on ${os}`),
+          ];
+          line(
+            id,
+            f.label,
+            [f.description, needs.length ? `needs ${needs.join(', ')}` : '']
+              .filter(Boolean)
+              .join('; '),
+          );
+        }
+        console.log(`tools (any nixpkgs name works): ${catalog.tools.join(' ')}`);
         return;
       }
       case 'down':
