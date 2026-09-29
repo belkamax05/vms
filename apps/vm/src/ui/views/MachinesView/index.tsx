@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { relative } from 'node:path';
 
 import { Text, useInput } from 'ink';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import Box from '@/dev-tools/ui/components/Box';
 import LinkRow from '@/dev-tools/ui/components/LinkRow';
@@ -21,7 +21,6 @@ import {
   importUserKey,
   kill,
   type MachineStatus,
-  publicKey,
   rotateUserKey,
   StartError,
   upDetached,
@@ -94,6 +93,25 @@ export const MachinesView = ({
   const [working, setWorking] = useState<string | undefined>();
   /** Machines whose last `up` from here failed - their console log says why, in the detail pane. */
   const [failedUp, setFailedUp] = useState<ReadonlySet<string>>(new Set());
+  /** Each machine's last error, shown in its detail pane until its next action. */
+  const [errors, setErrors] = useState<Readonly<Record<string, string>>>({});
+  const setError = (name: string, message?: string) =>
+    setErrors((previous) => {
+      const { [name]: _, ...rest } = previous;
+      return message ? { ...rest, [name]: message } : rest;
+    });
+  /** Something that went wrong without stopping the action - kept beside any earlier one. */
+  const warnFor = (name: string) => (message: string) =>
+    setErrors((previous) => ({
+      ...previous,
+      [name]: previous[name] ? `${previous[name]}\n${message}` : message,
+    }));
+  const fail = (name: string, error: unknown) => {
+    // A failed start's reason is console.log's, already in the detail pane.
+    if (!(error instanceof StartError))
+      setError(name, error instanceof Error ? error.message : String(error));
+    notify('');
+  };
   const [currentId, setCurrentId] = useState(session.selected);
   const current = statuses.find((status) => status.name === currentId) ?? statuses[0];
 
@@ -114,12 +132,13 @@ export const MachinesView = ({
 
   const act = async (name: string, label: string, action: () => Promise<string | undefined>) => {
     setWorking(name);
+    setError(name);
     notify(`${label}…`);
     try {
       const done = await action();
       notify(done ?? `${label} - done`, 'ok');
     } catch (error) {
-      notify(error instanceof Error ? error.message : String(error), 'error');
+      fail(name, error);
     } finally {
       setWorking(undefined);
       reload();
@@ -150,11 +169,10 @@ export const MachinesView = ({
           status.name,
           (text) => notify(text),
           (line) => notify(`${status.name}: ${line}`),
+          warnFor(status.name),
         );
       } catch (error) {
         markFailed(status.name, true);
-        // Its reason is console.log's, already in the detail pane - not repeated here.
-        if (error instanceof StartError) throw new Error(`${status.name} failed to start`);
         throw error;
       }
       return `${status.name} is booting - [s] waits for SSH and gets in`;
@@ -200,7 +218,7 @@ export const MachinesView = ({
       () =>
         void act(status.name, `Killing ${status.name}`, async () => {
           const notes: string[] = [];
-          await kill(status.name, (text) => notes.push(text));
+          await kill(status.name, (text) => notes.push(text), warnFor(status.name));
           return [`${status.name} is gone`, ...notes].join(' · ');
         }),
     );
@@ -216,28 +234,28 @@ export const MachinesView = ({
     });
   };
 
-  /** Every machine shows its vm-ssh key: the selected one gets it made as soon as it's missing. */
-  useEffect(() => {
-    if (!current || current.publicKey) return;
-    try {
-      publicKey(current.name);
-    } catch (error) {
-      notify(error instanceof Error ? error.message : String(error), 'error');
-    }
-    reload();
-  }, [current, notify, reload]);
-
   const rotateKey = (status: MachineStatus | undefined) => {
     if (!status?.publicKey || working) return;
     prompt.confirm(
-      `Rotate ${status.name}'s vm-ssh key? The old one stops working, and is removed from GitHub if gh can.`,
+      `Rotate ${status.name}'s vm-ssh key? The old one comes off GitHub and stops working; the new one goes on.`,
       () =>
         void act(status.name, `Rotating ${status.name}'s vm-ssh key`, async () => {
           const notes: string[] = [];
-          rotateUserKey(status.name, (text) => notes.push(text));
+          rotateUserKey(status.name, (text) => notes.push(text), warnFor(status.name));
           return notes.join(' · ');
         }),
     );
+  };
+
+  /** On the terminal: gh may need GitHub's approval in the browser first. */
+  const addToGithub = (status: MachineStatus | undefined) => {
+    if (!status?.publicKey || working) return;
+    onHandoff({
+      type: 'run',
+      command: vmCommand(['key', status.name, '--github'], 'always'),
+      cwd: repo.root,
+      label: `vm-ssh of ${status.name} to GitHub`,
+    });
   };
 
   const copyKey = (status: MachineStatus | undefined) => {
@@ -252,6 +270,7 @@ export const MachinesView = ({
       `Export ${status.name}'s PRIVATE key - keep it secret. Save to:`,
       (file) => {
         if (!file.trim()) return;
+        setError(status.name);
         try {
           const path = exportUserKey(status.name, file.trim());
           notify(
@@ -259,7 +278,7 @@ export const MachinesView = ({
             'ok',
           );
         } catch (error) {
-          notify(error instanceof Error ? error.message : String(error), 'error');
+          fail(status.name, error);
         }
         reload();
       },
@@ -276,7 +295,12 @@ export const MachinesView = ({
         () =>
           void act(status.name, `Importing ${status.name}'s vm-ssh`, async () => {
             const notes: string[] = [];
-            importUserKey(status.name, file.trim(), (text) => notes.push(text));
+            importUserKey(
+              status.name,
+              file.trim(),
+              (text) => notes.push(text),
+              warnFor(status.name),
+            );
             return notes.join(' · ');
           }),
       );
@@ -294,6 +318,7 @@ export const MachinesView = ({
       else if (input === 'l') relock(current);
       else if (input === 'k') rotateKey(current);
       else if (input === 'y') copyKey(current);
+      else if (input === 'g') addToGithub(current);
       else if (input === 'e') exportKey(current);
       else if (input === 'i') importKey(current);
     },
@@ -316,6 +341,7 @@ export const MachinesView = ({
     if (status.meta?.os !== 'nixos')
       actions.push({ hotkey: 'l', label: 'Lock', onPress: () => relock(status) });
     if (status.publicKey) {
+      actions.push({ hotkey: 'g', label: 'Add to GitHub', onPress: () => addToGithub(status) });
       actions.push({ hotkey: 'y', label: 'Copy key', onPress: () => copyKey(status) });
       actions.push({ hotkey: 'k', label: 'Rotate key', onPress: () => rotateKey(status) });
       actions.push({ hotkey: 'e', label: 'Export key', onPress: () => exportKey(status) });
@@ -391,12 +417,18 @@ export const MachinesView = ({
                         : `${meta.packages.length} apt packages, pinned in ${status.name}.lock.json`}
                 </Text>
               )}
-              {status.consoleTail.length > 0 && (
+              {errors[status.name] && (
                 <Box marginTop={1} flexShrink={0}>
-                  <Panel
-                    title={failed ? 'console.log - up failed' : 'console.log'}
-                    color={failed ? colors.error : undefined}
-                  >
+                  <Panel title="Error" color={colors.error}>
+                    <Text color={colors.text} wrap="wrap">
+                      {errors[status.name]}
+                    </Text>
+                  </Panel>
+                </Box>
+              )}
+              {failed && status.consoleTail.length > 0 && (
+                <Box marginTop={1} flexShrink={0}>
+                  <Panel title="console.log - up failed" color={colors.error}>
                     {status.consoleTail.slice(-LOG_LINES).map((line, index) => (
                       // biome-ignore lint/suspicious/noArrayIndexKey: log lines have no identity
                       <Text key={index} color={colors.text} wrap="wrap">

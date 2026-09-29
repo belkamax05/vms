@@ -86,7 +86,8 @@ rec {
           os=${cfg.os}
           user=${cfg.user}
           gui=${lib.boolToString cfg.gui}
-          packages=${lib.escapeShellArg (lib.concatStringsSep " " (lib.unique cfg.ubuntu.packages))}
+          github_user=${lib.escapeShellArg (if cfg.github.user == null then "" else cfg.github.user)}
+          packages=${lib.escapeShellArg (lib.concatStringsSep " " (lib.optionals (cfg.os == "ubuntu") (lib.unique cfg.ubuntu.packages)))}
           EOF
         '';
 

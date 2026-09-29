@@ -16,10 +16,11 @@ import { createConnection } from 'node:net';
 import { homedir, hostname } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
+import { VmError } from '../errors';
+import { accountName, addKey, authorize, GhAccessError, removeKey } from '../github';
 import { lockFile, type Repo, sharedKey, stateDir } from '../repo';
 
-/** A failure worth one line to the user - `vm: <message>` - rather than a stack trace. */
-export class VmError extends Error {}
+export { VmError };
 
 /** The runner exited before QEMU came up. Its reason is the end of console.log, quoted in the message. */
 export class StartError extends VmError {}
@@ -37,6 +38,8 @@ export interface Meta {
   gui: boolean;
   /** The apt packages `vm lock` resolves. None on NixOS. */
   packages: string[];
+  /** The GitHub account vm-ssh goes on (`github.user`); gh's active one when unset. */
+  githubUser?: string;
 }
 
 export type MachineState = 'running' | 'stopped' | 'absent';
@@ -49,7 +52,10 @@ export interface MachineStatus {
   sshPort?: number;
   stateDir: string;
   meta?: Meta;
-  /** The machine's own key, vm-ssh - the public half - once one was made. */
+  /**
+   * The machine's own key, vm-ssh - the public half. Only for a machine that exists, or one that
+   * was given a backed-up key (`vm key --import`) before its first `up`.
+   */
   publicKey?: string;
   hasLockFile: boolean;
   /** The lockfile was resolved for other apt packages than the build asks for - `up` refuses. */
@@ -79,6 +85,7 @@ export const readMeta = (dir: string): Meta | undefined => {
     user: values.user ?? '',
     gui: values.gui === 'true',
     packages: (values.packages ?? '').split(/\s+/).filter(Boolean),
+    githubUser: values.github_user || undefined,
   };
 };
 
@@ -167,7 +174,10 @@ export const machineStatus = (repo: Repo, name: string): MachineStatus => {
     sshPort: port > 0 ? port : undefined,
     stateDir: dir,
     meta,
-    publicKey: publicKey || undefined,
+    publicKey:
+      publicKey && (hasState(dir) || existsSync(join(dir, 'vm-ssh.backed-up')))
+        ? publicKey
+        : undefined,
     hasLockFile: existsSync(lockFile(repo, name)),
     lockStale: isLockStale(lockFile(repo, name), meta),
     consoleTail: tailLines(join(dir, 'console.log'), 200),
@@ -333,9 +343,16 @@ export const launchDetached = async (
 };
 
 /** `vm up -d`: build if needed, then boot in the background. */
-export const upDetached = async (repo: Repo, name: string, log: Log, onOutput?: Log) => {
+export const upDetached = async (
+  repo: Repo,
+  name: string,
+  log: Log,
+  onOutput?: Log,
+  warn: Log = log,
+) => {
   assertStopped(name);
   const { dir, port } = await prepare(repo, name, log, onOutput);
+  registerUserKey(name, log, warn);
   await launchDetached(name, runnerBin(name), dir, runnerEnv(name, dir, port));
   return { dir, port };
 };
@@ -347,6 +364,7 @@ export const upDetached = async (repo: Repo, name: string, log: Log, onOutput?: 
 export const upAttached = async (repo: Repo, name: string, log: Log) => {
   assertStopped(name);
   const { dir, port, meta } = await prepare(repo, name, log);
+  registerUserKey(name, log, log);
   if (meta && !meta.gui) {
     log(`Serial console - Ctrl-a x powers the VM off. vm ssh ${name} works from another terminal.`);
   }
@@ -427,40 +445,64 @@ export const down = async (name: string) => {
   while (isAlive(pid)) await Bun.sleep(200);
 };
 
+const githubUserOf = (name: string) => readMeta(stateDir(name))?.githubUser;
+
 /**
- * `vm kill` deletes vm-ssh with everything else; a copy added to GitHub would outlive it. With
- * gh signed in and allowed to (scope admin:public_key), that copy - the key whose text is
- * exactly this one, nothing else - is deleted too; without, it's named so it can be removed by
- * hand.
+ * The machine's vm-ssh on its GitHub account (see core/github), so the guest can clone without
+ * anyone adding it by hand - SSO, where an org enforces it, stays a click on GitHub's side. Run
+ * on every `up` and whenever the key changes. `warn` gets what went wrong; it never stops `up`.
  */
-const forgetUserKey = (name: string, log: Log) => {
+export const registerUserKey = (name: string, log: Log, warn: Log) => {
+  const account = githubUserOf(name);
+  try {
+    if (addKey(name, readText(join(stateDir(name), 'vm-ssh.pub')), account) === 'added')
+      log(`${name}: added vm-ssh to ${accountName(account)}'s GitHub keys`);
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    warn(
+      error instanceof GhAccessError
+        ? `vm-ssh isn't on GitHub: ${why} - [g] Add to GitHub does that and adds it (vm key ${name} --github)`
+        : `vm-ssh isn't on GitHub: ${why}`,
+    );
+  }
+};
+
+/**
+ * `vm key <name> --github`, on the terminal: gh gets what it needs for the machine's GitHub
+ * account (GitHub's approval, in the browser - once), then the key goes on it.
+ */
+export const addUserKeyToGithub = (name: string, log: Log) => {
+  const account = githubUserOf(name);
+  const pub = readText(join(stateDir(name), 'vm-ssh.pub'));
+  if (!pub) throw new VmError(`${name} has no vm-ssh key yet - it gets one on its first up`);
+  authorize(account);
+  log(
+    addKey(name, pub, account) === 'added'
+      ? `${name}: added vm-ssh to ${accountName(account)}'s GitHub keys`
+      : `${name}: vm-ssh is on ${accountName(account)}'s GitHub keys already`,
+  );
+  log(
+    'if the repos are in an org that enforces SSO, authorize the key for it: https://github.com/settings/keys',
+  );
+};
+
+/** The machine's current vm-ssh off its GitHub account, before it's deleted or replaced. */
+const retireUserKey = (name: string, log: Log, warn: Log) => {
   const pubPath = join(stateDir(name), 'vm-ssh.pub');
   if (!existsSync(pubPath)) return;
-  const pub = readText(pubPath).split(' ').slice(0, 2).join(' ');
-  const found = spawnSync(
-    'gh',
-    ['api', 'user/keys', '--jq', `.[] | select(.key == "${pub}") | .id`],
-    {
+  const account = githubUserOf(name);
+  try {
+    if (removeKey(readText(pubPath), account) === 'removed')
+      log(`${name}: removed vm-ssh from ${accountName(account)}'s GitHub keys`);
+    else log(`${name}: vm-ssh wasn't on ${accountName(account)}'s GitHub keys`);
+  } catch (error) {
+    const fingerprint = spawnSync('ssh-keygen', ['-lf', pubPath], {
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    },
-  );
-  if (!found.error && found.status === 0) {
-    const id = found.stdout.trim();
-    if (
-      id &&
-      spawnSync('gh', ['api', '-X', 'DELETE', `user/keys/${id}`], { stdio: 'ignore' }).status === 0
-    ) {
-      log(`${name}: removed vm-ssh from GitHub`);
-    }
-    return;
+    }).stdout?.split(' ')[1];
+    warn(
+      `vm-ssh (${fingerprint}) may still be on GitHub - remove it there: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-  const fingerprint = spawnSync('ssh-keygen', ['-lf', pubPath], { encoding: 'utf8' }).stdout?.split(
-    ' ',
-  )[1];
-  log(
-    `${name}: vm-ssh (${fingerprint}) is deleted - if you added it to GitHub, remove it there too`,
-  );
 };
 
 /**
@@ -490,17 +532,18 @@ const pushUserKey = (name: string) => {
 };
 
 /**
- * A new vm-ssh for the machine: the old one goes, from GitHub too when gh can (see
- * forgetUserKey), and the guest gets the new one - now when it's running, otherwise on the next
+ * A new vm-ssh for the machine: the old one goes, from GitHub too (see retireUserKey), the new
+ * one goes on GitHub (registerUserKey), and the guest gets it - now when it's running, otherwise on the next
  * `vm ssh` into it (`vm-ssh.pending`). Returns the new public key.
  */
-export const rotateUserKey = (name: string, log: Log) => {
+export const rotateUserKey = (name: string, log: Log, warn: Log = log) => {
   const dir = stateDir(name);
-  forgetUserKey(name, log);
+  retireUserKey(name, log, warn);
   for (const file of ['vm-ssh', 'vm-ssh.pub']) rmSync(join(dir, file), { force: true });
   rmSync(join(dir, 'vm-ssh.backed-up'), { force: true });
   ensureUserKey(name);
-  deliverUserKey(name, log, 'new vm-ssh', ' - add it on GitHub as vm-ssh');
+  deliverUserKey(name, log, 'new vm-ssh');
+  registerUserKey(name, log, warn);
   return publicKey(name);
 };
 
@@ -528,7 +571,7 @@ const expandHome = (path: string) =>
 /**
  * A backup of the machine's private vm-ssh - one GitHub already accepts - to `target`, readable
  * by the user only, never over an existing file. A backed-up key survives `vm kill` on GitHub
- * (see forgetUserKey), so importing it into a fresh machine needs no new approval.
+ * (see kill), so importing it into a fresh machine needs no new approval.
  */
 export const exportUserKey = (name: string, target: string) => {
   const dir = stateDir(name);
@@ -551,7 +594,7 @@ export const exportUserKey = (name: string, target: string) => {
  * have no passphrase: the guest uses it unattended. The key it replaces is not touched on
  * GitHub - export it first if it's worth keeping.
  */
-export const importUserKey = (name: string, source: string, log: Log) => {
+export const importUserKey = (name: string, source: string, log: Log, warn: Log = log) => {
   const path = expandHome(source);
   if (!existsSync(path)) throw new VmError(`no such file: ${path}`);
   const dir = stateDir(name);
@@ -571,6 +614,7 @@ export const importUserKey = (name: string, source: string, log: Log) => {
   writeFileSync(`${key}.pub`, `${pub.stdout.trim().split(' ').slice(0, 2).join(' ')} vm-ssh\n`);
   writeFileSync(join(dir, 'vm-ssh.backed-up'), `${path}\n`);
   deliverUserKey(name, log, `vm-ssh from ${path}`);
+  registerUserKey(name, log, warn);
   return publicKey(name);
 };
 
@@ -578,10 +622,10 @@ export const importUserKey = (name: string, source: string, log: Log) => {
  * Power it off and delete everything it wrote, vm-ssh included - and its GitHub copy, if gh can,
  * unless the key was backed up (exported or imported), which is for reusing it.
  */
-export const kill = async (name: string, log: Log) => {
+export const kill = async (name: string, log: Log, warn: Log = log) => {
   await down(name);
   const backup = readText(join(stateDir(name), 'vm-ssh.backed-up'));
   if (backup) log(`${name}: vm-ssh stays on GitHub - it's backed up in ${backup}`);
-  else forgetUserKey(name, log);
+  else retireUserKey(name, log, warn);
   rmSync(stateDir(name), { recursive: true, force: true });
 };

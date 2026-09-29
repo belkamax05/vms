@@ -65,7 +65,7 @@ const isTracked = (repo: Repo, path: string) =>
  */
 export const ensureLocked = async (repo: Repo, name: string, log: Log, onOutput?: Log) => {
   const { meta } = await prepare(repo, name, log, onOutput);
-  if (!meta?.packages.length) return;
+  if (meta?.os !== 'ubuntu' || !meta.packages.length) return;
   const target = lockFile(repo, name);
   if (existsSync(target) && !isLockStale(target, meta)) return;
   log(`${name}: its apt packages changed since the lockfile - locking them again...`);

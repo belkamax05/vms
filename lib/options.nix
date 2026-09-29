@@ -48,6 +48,18 @@ in
       '';
     };
 
+    github.user = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = ''
+        The GitHub account the machine's own key (vm-ssh) goes on - the one
+        with access to what the guest clones. `vm` adds the key there through
+        the host's gh on `up`, and removes it on `kill` and rotation; gh must
+        be logged in as it, with the admin:public_key scope. Null: gh's
+        active account.
+      '';
+    };
+
     gui = mkOption {
       type = types.bool;
       default = false;

@@ -1,6 +1,7 @@
 import { ensureLocked, lock } from './core/lock';
 import {
   down,
+  addUserKeyToGithub,
   exportUserKey,
   importUserKey,
   kill,
@@ -29,6 +30,8 @@ usage:
                          which is all an Ubuntu machine installs from
   vm key <name>          the public half of the machine's own key, vm-ssh -
                          the guest user's ~/.ssh/id_ed25519, e.g. for GitHub
+  vm key <name> --github  put vm-ssh on the machine's GitHub account through gh
+                         (asks GitHub for gh's permission first, if it lacks it)
   vm key <name> --export <file>
                          back up its private vm-ssh (store it securely), so a
                          key GitHub accepts outlives \`vm kill\`
@@ -125,10 +128,12 @@ export const run = async (...argv: string[]) => {
             `${name}: private vm-ssh written to ${path} - store it securely (a password manager),`,
           );
           log('never in a repo: whoever has it can use your GitHub as this machine.');
+        } else if (flag === '--github') {
+          addUserKeyToGithub(name, log);
         } else if (flag === '--import' && file) {
           console.log(importUserKey(name, file, log));
         } else if (flag) {
-          throw new VmError('usage: vm key <name> [--export <file> | --import <file>]');
+          throw new VmError('usage: vm key <name> [--github | --export <file> | --import <file>]');
         } else {
           console.log(publicKey(name, log));
         }
