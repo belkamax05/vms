@@ -1,6 +1,8 @@
-import { lock } from './core/lock';
+import { ensureLocked, lock } from './core/lock';
 import {
   down,
+  exportUserKey,
+  importUserKey,
   kill,
   type Log,
   type MachineStatus,
@@ -27,9 +29,15 @@ usage:
                          which is all an Ubuntu machine installs from
   vm key <name>          the public half of the machine's own key, vm-ssh -
                          the guest user's ~/.ssh/id_ed25519, e.g. for GitHub
+  vm key <name> --export <file>
+                         back up its private vm-ssh (store it securely), so a
+                         key GitHub accepts outlives \`vm kill\`
+  vm key <name> --import <file>
+                         make a backed-up private key its vm-ssh
   vm down <name>         power it off, keep its disk for the next \`up\`
   vm kill <name>         power it off and delete everything it wrote, vm-ssh
-                         included (and its GitHub copy, if gh can)
+                         included (and its GitHub copy, if gh can - unless
+                         it was backed up with --export or --import)
 
 Every machine's state - its disk overlay, seed, SSH port, console log, its
 vm-ssh key and a GC root for its build - lives in ~/.local/state/vms/<name>,
@@ -90,6 +98,7 @@ export const run = async (...argv: string[]) => {
       case 'up': {
         const detach = rest[0] === '-d';
         const name = needMachine(repo, detach ? rest[1] : rest[0]);
+        await ensureLocked(repo, name, log);
         if (!detach) {
           process.exitCode = await upAttached(repo, name, log);
           return;
@@ -107,9 +116,24 @@ export const run = async (...argv: string[]) => {
       case 'lock':
         await lock(repo, needMachine(repo, rest[0]), log);
         return;
-      case 'key':
-        console.log(publicKey(needMachine(repo, rest[0]), log));
+      case 'key': {
+        const name = needMachine(repo, rest[0]);
+        const [flag, file] = rest.slice(1);
+        if (flag === '--export' && file) {
+          const path = exportUserKey(name, file);
+          log(
+            `${name}: private vm-ssh written to ${path} - store it securely (a password manager),`,
+          );
+          log('never in a repo: whoever has it can use your GitHub as this machine.');
+        } else if (flag === '--import' && file) {
+          console.log(importUserKey(name, file, log));
+        } else if (flag) {
+          throw new VmError('usage: vm key <name> [--export <file> | --import <file>]');
+        } else {
+          console.log(publicKey(name, log));
+        }
         return;
+      }
       case 'down':
         await down(needMachine(repo, rest[0]));
         return;

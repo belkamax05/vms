@@ -1,18 +1,34 @@
 import { existsSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { relative } from 'node:path';
 
 import { Text, useInput } from 'ink';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import Box from '@/dev-tools/ui/components/Box';
+import LinkRow from '@/dev-tools/ui/components/LinkRow';
 import ListDetail from '@/dev-tools/ui/components/ListDetail';
+import Panel from '@/dev-tools/ui/components/Panel';
 import type { PickItem } from '@/dev-tools/ui/components/PickList';
 import Toolbar, { type ToolbarAction } from '@/dev-tools/ui/components/Toolbar';
 import usePrompt from '@/dev-tools/ui/hooks/usePrompt';
 import { useColors } from '@/dev-tools/ui/providers/TuiThemeProvider';
+import openUrl from '@/dev-tools/utils/system/openUrl';
+import revealPath from '@/dev-tools/utils/system/revealPath';
 
-import { down, kill, type MachineStatus, publicKey, upDetached } from '../../../core/machine';
-import { machineFile, type Repo, VM_BIN } from '../../../core/repo';
+import {
+  down,
+  exportUserKey,
+  importUserKey,
+  kill,
+  type MachineStatus,
+  publicKey,
+  rotateUserKey,
+  StartError,
+  upDetached,
+} from '../../../core/machine';
+import { ensureLocked } from '../../../core/lock';
+import { lockFile, machineFile, type Repo, VM_BIN } from '../../../core/repo';
+import copyToClipboard from '../../clipboard';
 import type { Handoff, Session, Tone } from '../../types';
 
 export interface MachinesViewProps {
@@ -26,6 +42,9 @@ export interface MachinesViewProps {
   onHandoff: (intent: Handoff) => void;
   onCaptureInput: (captured: boolean) => void;
 }
+
+/** How much of console.log the detail pane shows - its end, where a failure is. */
+const LOG_LINES = 30;
 
 const MARK: Record<MachineStatus['state'], string> = { running: '●', stopped: '○', absent: '·' };
 
@@ -54,8 +73,8 @@ const describeState = (status: MachineStatus) =>
  * The repo's machines beside what each one is, with the ways to boot, reach and throw it away.
  *
  * Booting in the background stays in the dashboard - nix's build output streams into the status
- * line - while everything that needs the terminal (ssh, a serial console, `vm lock`, the console
- * log) is handed to it through `vm` itself and comes back here after. Power-off and delete
+ * line - while everything that needs the terminal (ssh, a serial console, `vm lock`) is handed
+ * to it through `vm` itself and comes back here after. Power-off, delete and key rotation
  * always ask first.
  */
 export const MachinesView = ({
@@ -73,6 +92,8 @@ export const MachinesView = ({
   const prompt = usePrompt(onCaptureInput);
   /** The machine an action is running on, while it runs. */
   const [working, setWorking] = useState<string | undefined>();
+  /** Machines whose last `up` from here failed - their console log says why, in the detail pane. */
+  const [failedUp, setFailedUp] = useState<ReadonlySet<string>>(new Set());
   const [currentId, setCurrentId] = useState(session.selected);
   const current = statuses.find((status) => status.name === currentId) ?? statuses[0];
 
@@ -105,15 +126,37 @@ export const MachinesView = ({
     }
   };
 
+  const markFailed = (name: string, failed: boolean) =>
+    setFailedUp((previous) => {
+      const next = new Set(previous);
+      if (failed) next.add(name);
+      else next.delete(name);
+      return next;
+    });
+
   const up = (status: MachineStatus | undefined) => {
     if (!status || working || status.state === 'running') return;
+    markFailed(status.name, false);
     void act(status.name, `Starting ${status.name}`, async () => {
-      await upDetached(
-        repo,
-        status.name,
-        (text) => notify(text),
-        (line) => notify(`${status.name}: ${line}`),
-      );
+      try {
+        await ensureLocked(
+          repo,
+          status.name,
+          (text) => notify(text),
+          (line) => notify(`${status.name}: ${line}`),
+        );
+        await upDetached(
+          repo,
+          status.name,
+          (text) => notify(text),
+          (line) => notify(`${status.name}: ${line}`),
+        );
+      } catch (error) {
+        markFailed(status.name, true);
+        // Its reason is console.log's, already in the detail pane - not repeated here.
+        if (error instanceof StartError) throw new Error(`${status.name} failed to start`);
+        throw error;
+      }
       return `${status.name} is booting - [s] waits for SSH and gets in`;
     });
   };
@@ -173,31 +216,71 @@ export const MachinesView = ({
     });
   };
 
-  const consoleLog = (status: MachineStatus | undefined) => {
-    const path = status && join(status.stateDir, 'console.log');
-    if (!status || !path || !existsSync(path)) return;
-    onHandoff({
-      type: 'run',
-      command: ['less', '+G', path],
-      cwd: repo.root,
-      label: `${status.name}'s console log`,
-    });
-  };
-
-  const showKey = (status: MachineStatus | undefined) => {
-    if (!status || working) return;
+  /** Every machine shows its vm-ssh key: the selected one gets it made as soon as it's missing. */
+  useEffect(() => {
+    if (!current || current.publicKey) return;
     try {
-      publicKey(status.name);
-      notify(
-        status.publicKey
-          ? `${status.name}'s vm-ssh key is in the detail pane - add it on GitHub as vm-ssh`
-          : `Made ${status.name} its own key, vm-ssh - in the detail pane, to add on GitHub as vm-ssh`,
-        'ok',
-      );
+      publicKey(current.name);
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), 'error');
     }
     reload();
+  }, [current, notify, reload]);
+
+  const rotateKey = (status: MachineStatus | undefined) => {
+    if (!status?.publicKey || working) return;
+    prompt.confirm(
+      `Rotate ${status.name}'s vm-ssh key? The old one stops working, and is removed from GitHub if gh can.`,
+      () =>
+        void act(status.name, `Rotating ${status.name}'s vm-ssh key`, async () => {
+          const notes: string[] = [];
+          rotateUserKey(status.name, (text) => notes.push(text));
+          return notes.join(' · ');
+        }),
+    );
+  };
+
+  const copyKey = (status: MachineStatus | undefined) => {
+    if (!status?.publicKey) return;
+    copyToClipboard(status.publicKey);
+    notify(`Copied ${status.name}'s vm-ssh key - add it on GitHub as vm-ssh`, 'ok');
+  };
+
+  const exportKey = (status: MachineStatus | undefined) => {
+    if (!status?.publicKey || working) return;
+    prompt.ask(
+      `Export ${status.name}'s PRIVATE key - keep it secret. Save to:`,
+      (file) => {
+        if (!file.trim()) return;
+        try {
+          const path = exportUserKey(status.name, file.trim());
+          notify(
+            `${status.name}'s private vm-ssh saved to ${path} - only you can read it. Keep it in a password manager, never in a repo: whoever has it can use your GitHub as this machine`,
+            'ok',
+          );
+        } catch (error) {
+          notify(error instanceof Error ? error.message : String(error), 'error');
+        }
+        reload();
+      },
+      { initial: `~/vm-ssh-${status.name}.key` },
+    );
+  };
+
+  const importKey = (status: MachineStatus | undefined) => {
+    if (!status || working) return;
+    prompt.ask(`Private key file to make ${status.name}'s vm-ssh:`, (file) => {
+      if (!file.trim()) return;
+      prompt.confirm(
+        `Replace ${status.name}'s vm-ssh with ${file.trim()}? The current key is lost unless you exported it.`,
+        () =>
+          void act(status.name, `Importing ${status.name}'s vm-ssh`, async () => {
+            const notes: string[] = [];
+            importUserKey(status.name, file.trim(), (text) => notes.push(text));
+            return notes.join(' · ');
+          }),
+      );
+    });
   };
 
   useInput(
@@ -209,8 +292,10 @@ export const MachinesView = ({
       else if (input === 'd') powerOff(current);
       else if (input === 'x') destroy(current);
       else if (input === 'l') relock(current);
-      else if (input === 'o') consoleLog(current);
-      else if (input === 'k') showKey(current);
+      else if (input === 'k') rotateKey(current);
+      else if (input === 'y') copyKey(current);
+      else if (input === 'e') exportKey(current);
+      else if (input === 'i') importKey(current);
     },
     { isActive: !prompt.isOpen },
   );
@@ -230,10 +315,12 @@ export const MachinesView = ({
         ];
     if (status.meta?.os !== 'nixos')
       actions.push({ hotkey: 'l', label: 'Lock', onPress: () => relock(status) });
-    if (existsSync(join(status.stateDir, 'console.log'))) {
-      actions.push({ hotkey: 'o', label: 'Log', onPress: () => consoleLog(status) });
+    if (status.publicKey) {
+      actions.push({ hotkey: 'y', label: 'Copy key', onPress: () => copyKey(status) });
+      actions.push({ hotkey: 'k', label: 'Rotate key', onPress: () => rotateKey(status) });
+      actions.push({ hotkey: 'e', label: 'Export key', onPress: () => exportKey(status) });
     }
-    actions.push({ hotkey: 'k', label: 'Key', onPress: () => showKey(status) });
+    actions.push({ hotkey: 'i', label: 'Import key', onPress: () => importKey(status) });
     if (status.state !== 'absent') {
       actions.push({ hotkey: 'x', label: 'Kill', onPress: () => destroy(status), tone: 'danger' });
     }
@@ -277,8 +364,10 @@ export const MachinesView = ({
           const status = item?.value;
           if (!status) return null;
           const meta = status.meta;
+          const lockPath = lockFile(repo, status.name);
+          const failed = failedUp.has(status.name);
           return (
-            <Box flexDirection="column">
+            <Box flexDirection="column" flexGrow={1} overflow="hidden">
               <Toolbar actions={actionsFor(status)} />
               <Text bold color={status.state === 'running' ? colors.ok : colors.heading}>
                 {describeState(status)}
@@ -289,25 +378,61 @@ export const MachinesView = ({
                   : 'Not built yet - [u] builds and boots it'}
               </Text>
               {meta && meta.os !== 'nixos' && (
-                <Text color={status.hasLockFile ? colors.muted : colors.warn} wrap="truncate">
+                <Text
+                  color={status.hasLockFile && !status.lockStale ? colors.muted : colors.warn}
+                  wrap="truncate"
+                >
                   {meta.packages.length === 0
                     ? 'No apt packages to pin'
-                    : status.hasLockFile
-                      ? `${meta.packages.length} apt packages, pinned in ${status.name}.lock.json`
-                      : `${meta.packages.length} apt packages, no ${status.name}.lock.json - [l] locks them`}
+                    : !status.hasLockFile
+                      ? `${meta.packages.length} apt packages, no ${status.name}.lock.json - [l] locks them`
+                      : status.lockStale
+                        ? `${meta.packages.length} apt packages, out of date in ${status.name}.lock.json - [l] re-locks them`
+                        : `${meta.packages.length} apt packages, pinned in ${status.name}.lock.json`}
                 </Text>
               )}
+              {status.consoleTail.length > 0 && (
+                <Box marginTop={1} flexShrink={0}>
+                  <Panel
+                    title={failed ? 'console.log - up failed' : 'console.log'}
+                    color={failed ? colors.error : undefined}
+                  >
+                    {status.consoleTail.slice(-LOG_LINES).map((line, index) => (
+                      // biome-ignore lint/suspicious/noArrayIndexKey: log lines have no identity
+                      <Text key={index} color={colors.text} wrap="wrap">
+                        {line || ' '}
+                      </Text>
+                    ))}
+                  </Panel>
+                </Box>
+              )}
+              {/* Every path opens: files in their default app, the state dir in the file manager. */}
               <Box flexDirection="column" marginTop={1}>
-                <Text color={colors.muted} wrap="truncate-start">
-                  {`defined in ${relative(repo.root, machineFile(repo, status.name))}`}
-                </Text>
-                <Text color={colors.muted} wrap="truncate-start">
-                  {`state in ${status.stateDir}`}
-                </Text>
+                <LinkRow
+                  label="machine"
+                  value={relative(repo.root, machineFile(repo, status.name))}
+                  onOpen={() => openUrl(machineFile(repo, status.name))}
+                />
+                {status.hasLockFile && (
+                  <LinkRow
+                    label="lock"
+                    value={relative(repo.root, lockPath)}
+                    onOpen={() => openUrl(lockPath)}
+                  />
+                )}
+                <LinkRow
+                  label="state"
+                  value={status.stateDir}
+                  onOpen={
+                    existsSync(status.stateDir) ? () => revealPath(status.stateDir) : undefined
+                  }
+                />
               </Box>
               {status.publicKey && (
                 <Box flexDirection="column" marginTop={1}>
-                  <Text color={colors.heading}>vm-ssh (the guest user's ~/.ssh/id_ed25519)</Text>
+                  <Text color={colors.heading}>
+                    vm-ssh public key (the guest user's ~/.ssh/id_ed25519) - add it on GitHub
+                  </Text>
                   <Text color={colors.text} wrap="wrap">
                     {status.publicKey}
                   </Text>

@@ -20,6 +20,31 @@ let
   # Mesa wrapper (it covers AMD too, despite the name) and, unlike nixGL's
   # auto-detecting default, evaluates without --impure.
   nixGLMesa = nixGL.packages.x86_64-linux.nixGLIntel;
+
+  # Guest -> host requests: a virtio-serial port, /dev/virtio-ports/vms.host
+  # in the guest (root-only there - a plugin writes it with sudo), whose
+  # output lands in $VM_STATE/host-requests. `start` follows that file for
+  # as long as the runner's process lives (QEMU, once it execs) and does
+  # what a line asks - only ever from the list below, so a guest can open
+  # these pages in the host's browser and nothing else:
+  #
+  #   open ssh-new   GitHub's "add SSH key" page
+  #   open keys      GitHub's SSH keys, where a key is authorized for SSO
+  hostRequests = {
+    qemuArgs = "-device virtio-serial-pci,id=vmsserial -chardev file,id=vmshost,path=$VM_STATE/host-requests,append=on -device virtserialport,bus=vmsserial.0,chardev=vmshost,name=vms.host";
+    start = ''
+      : > "$VM_STATE/host-requests"
+      tail -n 0 -F --pid=$$ "$VM_STATE/host-requests" 2>/dev/null | while read -r verb page; do
+        [ "$verb" = open ] || continue
+        case $page in
+          ssh-new) url=https://github.com/settings/ssh/new ;;
+          keys) url=https://github.com/settings/keys ;;
+          *) continue ;;
+        esac
+        xdg-open "$url" >/dev/null 2>&1 &
+      done &
+    '';
+  };
 in
 rec {
   # machines/<name>.nix -> a runner package. `file` may live in any repo
@@ -67,7 +92,7 @@ rec {
 
       builder = { ubuntu = ./ubuntu.nix; nixos = ./nixos.nix; }.${cfg.os};
     in
-    import builder { inherit pkgs lib cfg mkRunner nixpkgs lockFile; };
+    import builder { inherit pkgs lib cfg mkRunner nixpkgs lockFile hostRequests; };
 
   # A directory of machines/<name>.nix -> { <name> = package; }, no registry
   # to edit. This repo's own flake and any repo extending it call this on

@@ -13,7 +13,7 @@
 # no archive involved after the first fetch. The image's store path is only
 # ever a read-only qcow2 backing file - each VM writes to its own overlay in
 # its state dir.
-{ pkgs, lib, cfg, mkRunner, lockFile, ... }:
+{ pkgs, lib, cfg, mkRunner, lockFile, hostRequests, ... }:
 
 let
   # Where the .debs are fetched from: the archive's pool first, and Ubuntu's
@@ -235,14 +235,17 @@ mkRunner {
     pubkey="$(cat "$VM_PUBKEY")"
     userpub="$(cat "$VM_USER_KEY.pub")"
     userkey="$(base64 -w0 "$VM_USER_KEY")"
-    sed -e "s|@SSH_PUBKEY@|$pubkey|" -e "s|@USER_PUBKEY@|$userpub|" -e "s|@USER_KEY_B64@|$userkey|" \
-      -e "s|@DEBS_URL@|$debs_url|" "$user_data" > "$VM_STATE/seed/user-data"
+    # g: the user-data is one line of JSON, and @DEBS_URL@ is in it more than once.
+    sed -e "s|@SSH_PUBKEY@|$pubkey|g" -e "s|@USER_PUBKEY@|$userpub|g" -e "s|@USER_KEY_B64@|$userkey|g" \
+      -e "s|@DEBS_URL@|$debs_url|g" "$user_data" > "$VM_STATE/seed/user-data"
     printf 'instance-id: %s\nlocal-hostname: %s\n' ${instanceId} ${cfg.name} > "$VM_STATE/seed/meta-data"
     rm -f "$VM_STATE/seed.iso"
     xorriso -as genisoimage -quiet -output "$VM_STATE/seed.iso" -volid cidata -joliet -rock \
       "$VM_STATE/seed/user-data" "$VM_STATE/seed/meta-data" 2>/dev/null
 
-    qemu-system-x86_64 \
+    ${hostRequests.start}
+    # shellcheck disable=SC2086 # hostRequests.qemuArgs is several words
+    qemu-system-x86_64 ${hostRequests.qemuArgs} \
       -name ${cfg.name} -enable-kvm -machine q35 -cpu host \
       -smp ${toString cfg.cpus} -m ${toString cfg.memory} \
       -drive if=virtio,file="$disk" \

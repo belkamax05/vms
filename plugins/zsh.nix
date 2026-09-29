@@ -37,7 +37,9 @@ in
       '')
     ];
     runcmd = [
-      [ "sh" "-c" "grep -qx ${zsh} /etc/shells || echo ${zsh} >> /etc/shells; usermod -s ${zsh} ${config.user}" ]
+      # Only once zsh is really there: a login shell that doesn't exist locks
+      # the user out of ssh and the desktop alike.
+      [ "sh" "-c" "test -x ${zsh} && { grep -qx ${zsh} /etc/shells || echo ${zsh} >> /etc/shells; } && usermod -s ${zsh} ${config.user}" ]
     ];
   };
 

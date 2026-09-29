@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import {
   firstFreePort,
+  isLockStale,
   type Log,
   launchDetached,
   pidIn,
@@ -52,6 +53,30 @@ const snapshotNow = () =>
     .replace(/[-:]/g, '')
     .replace(/\.\d+Z$/, 'Z');
 
+const isTracked = (repo: Repo, path: string) =>
+  spawnSync('git', ['-C', repo.root, 'ls-files', '--error-unmatch', relative(repo.root, path)], {
+    stdio: 'ignore',
+  }).status === 0;
+
+/**
+ * Before `up`: lock the machine's apt packages when its lockfile is missing or was resolved for
+ * other packages than it asks for now - a plugin or machine change did that, and there's only
+ * one right answer, so `up` shouldn't stop to ask for it. Nothing to do otherwise.
+ */
+export const ensureLocked = async (repo: Repo, name: string, log: Log, onOutput?: Log) => {
+  const { meta } = await prepare(repo, name, log, onOutput);
+  if (!meta?.packages.length) return;
+  const target = lockFile(repo, name);
+  if (existsSync(target) && !isLockStale(target, meta)) return;
+  log(`${name}: its apt packages changed since the lockfile - locking them again...`);
+  await lock(repo, name, log, onOutput);
+  if (!isTracked(repo, target)) {
+    throw new VmError(
+      `${name}: new ${relative(repo.root, target)} - the flake only sees tracked files: git add it, then up again`,
+    );
+  }
+};
+
 /**
  * `vm lock <name>`: boot the machine's image as it starts out (its apt preferences, nothing
  * installed - VM_LOCK=1, see lib/ubuntu.nix) in a scratch state dir, ask apt what installing
@@ -62,8 +87,8 @@ const snapshotNow = () =>
  *
  * Attached to the terminal throughout - apt's own output is what shows progress.
  */
-export const lock = async (repo: Repo, name: string, log: Log) => {
-  const { meta } = await prepare(repo, name, log);
+export const lock = async (repo: Repo, name: string, log: Log, onOutput?: Log) => {
+  const { meta } = await prepare(repo, name, log, onOutput);
   if (!meta?.packages.length) {
     log(`${name} installs no apt packages - nothing to lock`);
     return;
@@ -104,12 +129,17 @@ export const lock = async (repo: Repo, name: string, log: Log) => {
       {
         input: RESOLVE,
         encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'inherit'],
+        // Under the dashboard apt's output would draw over it - its status line gets it instead.
+        stdio: ['pipe', 'pipe', onOutput ? 'pipe' : 'inherit'],
         maxBuffer: 64 * 1024 * 1024,
       },
     );
-    if (resolved.status !== 0)
-      throw new VmError(`apt couldn't resolve ${packages.join(' ')} - see above`);
+    if (resolved.status !== 0) {
+      const said = onOutput && resolved.stderr?.trim().split('\n').slice(-3).join(' / ');
+      throw new VmError(
+        `apt couldn't resolve ${packages.join(' ')}${said ? `: ${said}` : ' - see above'}`,
+      );
+    }
 
     const lines = resolved.stdout.split('\n').filter(Boolean);
     const missing = lines
@@ -128,7 +158,9 @@ export const lock = async (repo: Repo, name: string, log: Log) => {
     writeFileSync(`${target}.tmp`, formatLock(snapshot, packages, debs));
     renameSync(`${target}.tmp`, target);
     log(`${name}: ${debs.length} .debs locked in ${target}`);
-    log(`the flake only sees tracked files: git add ${relative(repo.root, target)}`);
+    if (!isTracked(repo, target)) {
+      log(`the flake only sees tracked files: git add ${relative(repo.root, target)}`);
+    }
   } finally {
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);

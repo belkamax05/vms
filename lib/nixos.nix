@@ -3,7 +3,7 @@
 # the host's /nix/store over 9p - no image to build or download - with a
 # qcow2 for everything the guest writes. The base below is the minimum to
 # log in; anything more comes from plugins' `nixos.modules`.
-{ pkgs, lib, cfg, nixpkgs, mkRunner, ... }:
+{ pkgs, lib, cfg, nixpkgs, mkRunner, hostRequests, ... }:
 
 let
   system = nixpkgs.lib.nixosSystem {
@@ -78,8 +78,10 @@ mkRunner {
   script = ''
     export NIX_DISK_IMAGE="$VM_STATE/disk.qcow2"
     export QEMU_NET_OPTS="hostfwd=tcp:127.0.0.1:$VM_SSH_PORT-:22"
-    export QEMU_OPTS="-pidfile $VM_STATE/qemu.pid -fw_cfg name=opt/vms/authorized_keys,file=$VM_PUBKEY -fw_cfg name=opt/vms/user_key,file=$VM_USER_KEY -fw_cfg name=opt/vms/user_key_pub,file=$VM_USER_KEY.pub"
+    export QEMU_OPTS="-pidfile $VM_STATE/qemu.pid -fw_cfg name=opt/vms/authorized_keys,file=$VM_PUBKEY -fw_cfg name=opt/vms/user_key,file=$VM_USER_KEY -fw_cfg name=opt/vms/user_key_pub,file=$VM_USER_KEY.pub ${hostRequests.qemuArgs}"
+    ${hostRequests.start}
     cd "$VM_STATE"
     exec ${vm}/bin/run-${cfg.name}-vm
   '';
+  runtimeInputs = [ pkgs.coreutils ];
 }

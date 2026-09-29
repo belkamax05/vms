@@ -91,6 +91,7 @@ plugins, since list options from all of them concatenate.
 | `nix` | official multi-user installer, pinned, flakes on | flakes on (NixOS already has Nix) |
 | `git` | nixpkgs' `git` (`ubuntu.nixPackages`) | `programs.git` |
 | `zsh` | nixpkgs' `zsh`, the login shell | `programs.zsh`, the login shell |
+| `repos` | `repos = [ { url; dir; } ]` cloned on desktop login, once the machine's vm-ssh key is on GitHub | the same |
 
 ## Extending it from another repo
 
