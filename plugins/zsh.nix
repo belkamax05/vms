@@ -4,6 +4,8 @@
 # rather than Debian's /etc/zsh/, so it gets no system config at all: the
 # user's own files below give it Ubuntu's login PATH and a usable shell,
 # and stop zsh's new-user wizard, which only runs while they're missing.
+# Other plugins add to it with files in /etc/zshrc.d/*.zsh - system-wide,
+# since cloud-init would make any missing folder under ~ root's.
 { config, pkgs, ... }:
 
 let
@@ -34,6 +36,8 @@ in
         bindkey -e
         autoload -Uz compinit && compinit
         PROMPT='%F{green}%n@%m%f:%F{blue}%~%f%# '
+        # Other plugins' shell setup (the direnv plugin's hook, say).
+        for f in /etc/zshrc.d/*.zsh(N); do source "$f"; done
       '')
     ];
     runcmd = [

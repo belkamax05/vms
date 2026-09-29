@@ -30,14 +30,15 @@ let
 
   packages = lib.unique cfg.ubuntu.packages;
 
-  # ubuntu.nixPackages: one env of them all, and its whole closure as a
+  # ubuntu.nixPackages and `packages`: one env of them all, and its whole closure as a
   # tarball the runner serves next to the .debs. The guest unpacks it into
   # its own /nix/store - store paths are absolute, so that's where they
   # have to live - and links the env's binaries into /usr/local/bin through
   # nixProfile, so that swapping the env (a new config on the same disk)
   # is one symlink.
-  nixPackages = cfg.ubuntu.nixPackages != [ ];
-  nixEnv = pkgs.buildEnv { name = "${cfg.name}-nix-packages"; paths = cfg.ubuntu.nixPackages; };
+  nixPackageList = lib.unique (cfg.packages ++ cfg.ubuntu.nixPackages);
+  nixPackages = nixPackageList != [ ];
+  nixEnv = pkgs.buildEnv { name = "${cfg.name}-nix-packages"; paths = nixPackageList; };
   nixClosure = pkgs.runCommand "${cfg.name}-nix-closure.tar" { } ''
     sed 's|^/||' ${pkgs.closureInfo { rootPaths = [ nixEnv ]; }}/store-paths |
       tar -cf $out -C / --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner -T -

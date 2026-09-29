@@ -74,6 +74,8 @@ OS-specific half for each OS it supports:
 
 - `ubuntu.packages`, `ubuntu.runcmd`, `ubuntu.writeFiles`, `ubuntu.cloudConfig`
   are cloud-init fragments that run on first boot.
+- `packages` are nixpkgs packages for either OS: `environment.systemPackages` on
+  NixOS, `ubuntu.nixPackages` on Ubuntu - one line for a plain tool.
 - `ubuntu.nixPackages` are packages from this repo's pinned nixpkgs (the `pkgs`
   module argument), for when Ubuntu's are too old. Their closure is built on the
   host and served like the `.deb`s, and first boot unpacks it into the guest's
@@ -92,6 +94,7 @@ plugins, since list options from all of them concatenate.
 | `git` | nixpkgs' `git` (`ubuntu.nixPackages`) | `programs.git` |
 | `zsh` | nixpkgs' `zsh`, the login shell | `programs.zsh`, the login shell |
 | `repos` | `repos = [ { url; dir; } ]` cloned on desktop login, once the machine's vm-ssh key is on GitHub | the same |
+| `direnv` | direnv + nix-direnv from nixpkgs, zsh hook, `direnv.trusted` folders | `programs.direnv`, the same |
 
 ## Extending it from another repo
 

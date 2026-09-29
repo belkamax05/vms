@@ -67,6 +67,7 @@ let
           '';
         };
       }
+      { environment.systemPackages = cfg.packages; }
     ] ++ cfg.nixos.modules;
   };
 

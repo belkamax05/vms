@@ -48,6 +48,17 @@ in
       '';
     };
 
+    packages = mkOption {
+      type = types.listOf types.package;
+      default = [ ];
+      description = ''
+        Packages from this repo's pinned nixpkgs (the `pkgs` module
+        argument), on either OS: `environment.systemPackages` on NixOS,
+        `ubuntu.nixPackages` on Ubuntu. For a plain tool that needs no
+        per-OS setup - anything that does keeps to the OS halves.
+      '';
+    };
+
     github.user = mkOption {
       type = types.nullOr types.str;
       default = null;
