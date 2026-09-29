@@ -13,7 +13,7 @@
 # no archive involved after the first fetch. The image's store path is only
 # ever a read-only qcow2 backing file - each VM writes to its own overlay in
 # its state dir.
-{ pkgs, lib, cfg, mkRunner, ... }:
+{ pkgs, lib, cfg, mkRunner, lockFile, ... }:
 
 let
   # Where the .debs are fetched from: the archive's pool first, and Ubuntu's
@@ -30,9 +30,9 @@ let
 
   packages = lib.unique cfg.ubuntu.packages;
 
-  # machines/<name>.lock.json, written by `vm lock`: the packages it was
-  # resolved for, and every .deb that takes on top of the image.
-  lockFile = ../machines + "/${cfg.name}.lock.json";
+  # machines/<name>.lock.json, next to the machine's file (see
+  # lib/default.nix), written by `vm lock`: the packages it was resolved
+  # for, and every .deb that takes on top of the image.
   lock = if builtins.pathExists lockFile then builtins.fromJSON (builtins.readFile lockFile) else null;
   lockProblem =
     if packages == [ ] then null

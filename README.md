@@ -11,6 +11,8 @@ desktop, or later your dotfiles, is an optional **plugin** that a machine choose
 to import.
 
 ```sh
+vm                     # the dashboard: every machine, and the ways to boot,
+                       # reach and throw it away - mouse and hotkeys
 vm ls                  # every machine, and whether it's running
 vm up nixos            # boot, attached to this terminal (Ctrl-a x to quit)
 vm up -d ubuntu        # boot in the background
@@ -25,11 +27,24 @@ vm kill ubuntu         # power off and delete everything it wrote
 GUI machines (`ubuntu-gui`, `nixos-gui`) open a window instead of taking over
 the terminal, rendered on your GPU through virgl.
 
+`vm` is a Bun app (`apps/vm`) on dev-tools' terminal-UI kit, the same way as
+dev-tools' own giti/porti: the commands above are scripted and never load the
+UI, and `vm` alone opens a dashboard where every action is both a click and a
+hotkey. Booting in the background stays in the dashboard, with nix's build
+output in the status line. ssh, a serial console, `vm lock` and the console log
+borrow the whole terminal and come back to it after. Its first run does
+`bun install` for the workspace (this repo's apps plus `libs/dev-tools`).
+
 ## Layout
 
 ```
-bin/vm            the host command; mr's link_bins puts it on PATH
-flake.nix         machines/* -> packages.<name>; `nix flake check`
+bin/vm            the host command (a shim for apps/vm); mr's link_bins puts it on PATH
+apps/vm/          the command itself: src/run.ts (scripted commands),
+                  src/core (machines, lock), src/ui (the dashboard)
+libs/dev-tools/   git submodule - the terminal-UI kit, a member of this
+                  repo's Bun workspace (package.json)
+flake.nix         machines/* -> packages.<name>; `lib` for repos that extend
+                  this one; `nix flake check`
 machines/         one file per machine, auto-discovered - no registry
 plugins/          optional layers a machine imports
 lib/
@@ -41,7 +56,8 @@ lib/
 
 ## Machines and plugins
 
-A machine is a module. It sets `os` and optionally some sizes:
+A machine is a module. It sets `os` and optionally some sizes, or imports
+another machine and adds to it (`nixos-gui` is `nixos` plus `gui`):
 
 ```nix
 # machines/ubuntu-dev.nix
@@ -68,6 +84,40 @@ plugins, since list options from all of them concatenate.
 | --- | --- | --- |
 | `gui` | `ubuntu-desktop-minimal` (GNOME), autologin | GNOME + GDM, autologin |
 | `nix` | official multi-user installer, pinned, flakes on | flakes on (NixOS already has Nix) |
+| `git` | the `git` package, pinned by the lockfile | `programs.git` |
+
+## Extending it from another repo
+
+A repo with machines of its own (`~/dfs/vms-dfs`) checks this one out as a
+submodule at `libs/vms` and builds its own `machines/` with this repo's lib:
+
+```nix
+# flake.nix
+{
+  inputs.self.submodules = true;       # so the relative input below has files
+  inputs.vms.url = "path:./libs/vms";  # the submodule's commit; its nixpkgs pin
+  outputs = { self, vms }: {
+    packages.x86_64-linux = vms.lib.mkMachines ./machines;
+  };
+}
+```
+
+Every machine and plugin gets this repo's root as the `vms` module argument, so
+a machine there extends one here the same way `nixos-gui` extends `nixos`:
+
+```nix
+# machines/ubuntu-dfs.nix
+{ vms, ... }:
+{
+  imports = [ (vms + "/machines/ubuntu-gui.nix") (vms + "/plugins/git.nix") ];
+}
+```
+
+Plugins stay here, so every repo gets them. Lockfiles live next to the
+machine's own file, so `vm lock` writes that repo's. Its `bin/` gets a shim
+that runs this repo's `bin/vm` with `VMS_REPO` set to itself, and that shim
+gets the same commands and dashboard over its machines. Machine names share
+`~/.local/state/vms/`, so they must be unique across repos.
 
 ## How each OS is built
 
@@ -133,6 +183,9 @@ sudo, and is logged in automatically on the console and on the desktop.
 
 ```sh
 nix flake check   # every machine evaluates, and bin/vm passes shellcheck
+bun test ./apps   # the vm app's own tests
+bun run typecheck
+bun run lint
 ```
 
 The check doesn't build or boot any machine, because that would download the

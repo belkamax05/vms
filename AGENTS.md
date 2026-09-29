@@ -21,7 +21,14 @@ action. The user stages and commits everything themselves. See
   `nixos.modules`. Don't split a plugin into per-OS files, and don't
   branch on `os` inside one.
 - **Every machine produces the same runner shape** (`bin/vm-run` + `meta`,
-  see `lib/default.nix`). `bin/vm` must never branch on the OS.
+  see `lib/default.nix`). `vm` (`apps/vm`) must never branch on the OS
+  beyond hiding an action that can't apply (`Lock` on NixOS).
+- **Other repos extend this one; keep that API whole.** `flake.nix`'s `lib`
+  (`mkMachines`, `mkMachinesCheck`), the `vms` module argument (this repo's
+  root, for importing its machines/plugins), lockfiles next to the machine's
+  own file, and `VMS_REPO` for `vm` are what `~/dfs/vms-dfs` is built on.
+  Nothing may assume machines live in this repo's `machines/`. Plugins, all
+  of them, live here, never in an extending repo.
 - **All of a machine's host state lives in `~/.local/state/vms/<name>/`**,
   so that `vm kill` removes it with a single `rm -rf`. Nothing may write
   outside it, except the shared `id_ed25519` keypair next to it.
@@ -40,6 +47,8 @@ action. The user stages and commits everything themselves. See
 - **The flake only sees tracked files once this is a git repo.** A new
   `machines/`/`plugins/` file is invisible to `vm up` until it is
   `git add`ed. The user does that, not the agent.
-- **Host tooling (e.g. a TUI for `vm`) belongs to the repo, not the
-  guests.** It may use dev-tools as a submodule. Nothing from it is ever
-  installed into a VM.
+- **Host tooling belongs to the repo, not the guests.** `vm` is a Bun app
+  on dev-tools (the `libs/dev-tools` submodule, a Bun workspace member) and
+  follows dev-tools' app conventions: `src/run.ts` for scripted commands,
+  lazily importing the dashboard, and every dashboard action reachable by
+  click and hotkey. Nothing from it is ever installed into a VM.

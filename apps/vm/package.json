@@ -1,0 +1,11 @@
+{
+  "name": "vm",
+  "description": "Throwaway VMs - list, boot, reach and throw away the machines in machines/",
+  "module": "src/run.ts",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "ink": "^7.1.1",
+    "react": "^19.2.8"
+  }
+}

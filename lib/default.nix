@@ -21,12 +21,21 @@ let
   # auto-detecting default, evaluates without --impure.
   nixGLMesa = nixGL.packages.x86_64-linux.nixGLIntel;
 in
-{
+rec {
+  # machines/<name>.nix -> a runner package. `file` may live in any repo
+  # that uses this one (see mkMachines); `vms` is this repo's root, handed
+  # to every machine and plugin so one can import this repo's machines and
+  # plugins by path: `imports = [ (vms + "/machines/ubuntu-gui.nix") ];`.
   mkMachine = name: file:
     let
       cfg = (lib.evalModules {
         modules = [ ./options.nix file { inherit name; } ];
+        specialArgs.vms = ../.;
       }).config;
+
+      # Next to the machine's own file, so a repo that adds machines keeps
+      # their lockfiles too - `vm lock` writes it there.
+      lockFile = dirOf file + "/${name}.lock.json";
 
       mkRunner = { script, runtimeInputs ? [ ] }:
         let
@@ -57,5 +66,23 @@ in
 
       builder = { ubuntu = ./ubuntu.nix; nixos = ./nixos.nix; }.${cfg.os};
     in
-    import builder { inherit pkgs lib cfg mkRunner nixpkgs; };
+    import builder { inherit pkgs lib cfg mkRunner nixpkgs lockFile; };
+
+  # A directory of machines/<name>.nix -> { <name> = package; }, no registry
+  # to edit. This repo's own flake and any repo extending it call this on
+  # their own machines/ directory.
+  mkMachines = dir: lib.mapAttrs'
+    (file: _: lib.nameValuePair (lib.removeSuffix ".nix" file)
+      (mkMachine (lib.removeSuffix ".nix" file) (dir + "/${file}")))
+    (lib.filterAttrs (file: type: type == "regular" && lib.hasSuffix ".nix" file)
+      (builtins.readDir dir));
+
+  # `nix flake check` for a set of machines: every one evaluates, none is
+  # built (building them all would download the Ubuntu image and a GNOME
+  # closure). unsafeDiscardOutputDependency: depend on the .drv only - a
+  # plain drvPath would pull in its outputs, i.e. build every machine.
+  mkMachinesCheck = machines: pkgs.writeText "machines"
+    (lib.concatMapStringsSep "\n"
+      (m: builtins.unsafeDiscardOutputDependency m.drvPath)
+      (lib.attrValues machines));
 }

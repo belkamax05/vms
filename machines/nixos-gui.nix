@@ -1,5 +1,4 @@
-# NixOS 26.05 with GNOME, logged straight in.
+# machines/nixos.nix plus GNOME, logged straight in.
 {
-  imports = [ ../plugins/gui.nix ];
-  os = "nixos";
+  imports = [ ./nixos.nix ../plugins/gui.nix ];
 }

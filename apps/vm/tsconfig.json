@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "allowJs": true,
+    "types": ["bun"],
+
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+
+    // dev-tools is the submodule at libs/dev-tools, a member of this repo's
+    // Bun workspace (../../package.json) - which is what makes its react and
+    // ink the same copy as ours, so its components can be rendered here.
+    "paths": {
+      "@/dev-tools/*": ["../../libs/dev-tools/libs/*"]
+    }
+  }
+}

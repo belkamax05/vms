@@ -1,0 +1,21 @@
+{
+  "name": "vms",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "libs/dev-tools",
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "bun test ./apps",
+    "typecheck": "cd apps/vm && bunx tsc --noEmit",
+    "lint": "bun biome check .",
+    "format": "bun biome check --write --unsafe ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.10",
+    "@types/bun": "latest",
+    "@types/react": "^19.2.18",
+    "typescript": "^5"
+  }
+}
