@@ -1,8 +1,10 @@
 #!/bin/sh
 # vms-repos (see repos.nix): clone the machine's repos once GitHub accepts its
-# vm-ssh key. Started at every desktop login. With every repo already cloned it
-# exits straight away and no window opens; otherwise it reopens itself in a
-# terminal, waits for the key to work, clones what's missing and closes.
+# vm-ssh key. Started at every desktop login, and at every console or SSH
+# login. With every repo already cloned it exits straight away and nothing
+# opens; otherwise it works in a terminal - a window of its own on a desktop,
+# the login's own otherwise - waits for the key to work, clones what's
+# missing and is done.
 set -u
 
 # "<url> <dir>" per line, <dir> relative to $HOME - filled in by repos.nix.
@@ -22,6 +24,11 @@ if [ "${1:-}" != --in-terminal ]; then
   done
   exec x-terminal-emulator -e "$0" --in-terminal
 fi
+
+# One at a time: the desktop's window and a login shell may both start it.
+lock="${TMPDIR:-/tmp}/vms-repos-$(id -u).lock"
+mkdir "$lock" 2>/dev/null || exit 0
+trap 'rm -rf "$lock"' EXIT
 
 # One keypress, without Enter.
 key() {
@@ -72,7 +79,7 @@ done
 # tried again at the next login.
 said=$(mktemp)
 status=$(mktemp)
-trap 'rm -f "$said" "$status"' EXIT
+trap 'rm -rf "$said" "$status" "$lock"' EXIT
 asked_sso=
 while list=$(missing) && [ -n "$list" ]; do
   sso=

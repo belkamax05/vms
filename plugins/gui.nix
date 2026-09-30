@@ -30,10 +30,11 @@ in
 {
   imports = [ ./desktop.nix ];
 
-  ubuntu = {
-    packages = [ "ubuntu-desktop-minimal" "dconf-cli" ];
-    writeFiles = [
-      # System defaults, applied by desktop.nix's `dconf update`.
+  desktop.displayManager = "gdm";
+
+  # System defaults, applied by desktop.nix's `dconf update` - the same on
+  # every distro.
+  cloud.writeFiles = [
       {
         path = "/etc/dconf/profile/user";
         defer = true;
@@ -47,6 +48,52 @@ in
         defer = true;
         content = noLock.keyfile;
       }
+  ];
+
+  # Debian's GDM reads daemon.conf (Ubuntu's, custom.conf) - a conffile
+  # either way, kept by the install's --force-confold.
+  debian = {
+    packages = [ "gnome-core" "gdm3" "dconf-cli" ];
+    writeFiles = [{
+      path = "/etc/gdm3/daemon.conf";
+      defer = true;
+      content = ''
+        [daemon]
+        AutomaticLoginEnable=true
+        AutomaticLogin=${config.user}
+      '';
+    }];
+  };
+
+  # Arch's `gnome` is a group, not a package: its parts by name, so the
+  # install can be checked for.
+  arch = {
+    packages = [ "gnome-shell" "gnome-session" "gdm" "gnome-control-center" "gnome-console" "nautilus" "dconf" ];
+    writeFiles = [{
+      path = "/etc/gdm/custom.conf";
+      content = ''
+        [daemon]
+        AutomaticLoginEnable=true
+        AutomaticLogin=${config.user}
+      '';
+    }];
+  };
+
+  alpine = {
+    packages = [ "gnome" "gdm" "dconf" ];
+    writeFiles = [{
+      path = "/etc/gdm/custom.conf";
+      content = ''
+        [daemon]
+        AutomaticLoginEnable=true
+        AutomaticLogin=${config.user}
+      '';
+    }];
+  };
+
+  ubuntu = {
+    packages = [ "ubuntu-desktop-minimal" "dconf-cli" ];
+    writeFiles = [
       # defer: written in cloud-init's final stage, once the user exists.
       # That's before the install (lib/ubuntu.nix runs it from runcmd), and
       # gdm3 ships custom.conf as a conffile - the install's --force-confold

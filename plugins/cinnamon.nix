@@ -23,6 +23,8 @@ in
 {
   imports = [ ./desktop.nix ];
 
+  desktop.displayManager = "lightdm";
+
   ubuntu = {
     packages = [ "cinnamon" "cinnamon-session" "lightdm" "slick-greeter" "dconf-cli" ];
     writeFiles = [

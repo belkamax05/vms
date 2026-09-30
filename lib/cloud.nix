@@ -19,6 +19,15 @@
 #           fetch.
 #   Arch    by date: pacman reads the Arch Linux Archive for the image's own
 #           day, so every package is the version it was that day.
+#   Debian  as Ubuntu: locked .debs, from Debian's archive (and its separate
+#           security archive), snapshot.debian.org as the fallback.
+#   Arch    by date, as above.
+#   Fedora  by release: only the release repo, frozen the day it shipped -
+#           never the updates repo, which moves.
+#   Rocky,  by point release (10.2): repos pinned to it, whose content only
+#   Alma    takes that point release's fixes, and move to the vault - listed
+#           too - once the next one ships.
+#   openSUSE Leap, by release: its release repo only, as Fedora.
 #   Alpine  by branch: its stable branch (v3.24) only takes fixes, but it has
 #           no archive to pin a day in - the one guest whose packages can
 #           move under it.
@@ -29,13 +38,59 @@
 
 let
   isUbuntu = cfg.os == "ubuntu";
+  # The apt guests, whose packages `vm lock` locks .deb by .deb.
+  isApt = lib.elem cfg.os [ "ubuntu" "debian" ];
 
-  # Where the .debs are fetched from: the archive's pool first, and Ubuntu's
-  # snapshot of the archive at the moment `vm lock` ran as the fallback - a
-  # file superseded since may be pruned from the pool, never from the
-  # snapshot, and pool files never change once published.
-  aptPool = "http://archive.ubuntu.com/ubuntu";
-  aptSnapshot = "https://snapshot.ubuntu.com/ubuntu/${lock.snapshot}";
+  # Where a locked .deb is fetched from: the archives' pools first, and their
+  # snapshots at the moment `vm lock` ran as the fallback - a file superseded
+  # since may be pruned from a pool, never from a snapshot, and pool files
+  # never change once published. Debian keeps security updates in an archive
+  # of its own (pool/updates/...); the one that hasn't the path answers 404
+  # and the next is tried.
+  aptUrls = path: {
+    ubuntu = [
+      "http://archive.ubuntu.com/ubuntu/${path}"
+      "https://snapshot.ubuntu.com/ubuntu/${lock.snapshot}/${path}"
+    ];
+    debian = [
+      "https://deb.debian.org/debian/${path}"
+      "https://deb.debian.org/debian-security/${path}"
+      "https://snapshot.debian.org/archive/debian/${lock.snapshot}/${path}"
+      "https://snapshot.debian.org/archive/debian-security/${lock.snapshot}/${path}"
+    ];
+  }.${cfg.os};
+
+  # cloud-init is Python, so every cloud image has it - and not always curl.
+  pyFetch = "python3 -c 'import shutil, sys, urllib.request; shutil.copyfileobj(urllib.request.urlopen(sys.argv[1]), sys.stdout.buffer)'";
+
+  # Rocky and AlmaLinux: their repos, pinned to a point release - the live
+  # path while it's current, the vault's once the next one ships.
+  pinnedDnf = { name, key, urls }: {
+    path = "/etc/yum.repos.d/vms-pinned.repo";
+    content = lib.concatMapStrings (repo: ''
+      [vms-${lib.toLower repo}]
+      name=${name} ${repo} (pinned by vms)
+      baseurl=${lib.concatMapStringsSep " " (url: "${url}/${repo}/x86_64/os/") urls}
+      gpgcheck=1
+      gpgkey=file:///etc/pki/rpm-gpg/${key}
+      enabled=1
+
+    '') [ "BaseOS" "AppStream" ];
+  };
+  dnfDistro = { image, repos, pin ? [ ] }: {
+    inherit image;
+    packages = lib.unique cfg.dnf.packages;
+    nixPackages = [ ];
+    writeFiles = pin;
+    runcmd = [ ];
+    adminGroup = "wheel";
+    shell = "/bin/bash";
+    console = systemdConsole;
+    installed = "rpm -q ${lib.escapeShellArgs packages} >/dev/null";
+    recover = "";
+    fetch = pyFetch;
+    install = "dnf install -y --disablerepo='*' ${lib.concatMapStringsSep " " (r: "--enablerepo=${r}") repos} ${lib.escapeShellArgs packages}";
+  };
 
   # One pinned image per `ubuntu.release`. A machine's lockfile is resolved
   # against its release's image, so moving a machine to another release
@@ -99,7 +154,7 @@ let
       # sudo for the user's passwordless sudo, whatever the image has.
       packages = lib.unique ([ "sudo" ] ++ cfg.arch.packages);
       nixPackages = [ ];
-      writeFiles = [
+      writeFiles = cfg.arch.writeFiles ++ [
         {
           path = "/etc/pacman.d/mirrorlist";
           content = ''
@@ -107,13 +162,81 @@ let
           '';
         }
       ];
-      runcmd = [ ];
+      runcmd = cfg.arch.runcmd;
       adminGroup = "wheel";
       shell = "/bin/bash";
       console = systemdConsole;
       installed = "pacman -Q ${lib.escapeShellArgs packages} >/dev/null";
       recover = "rm -f /var/lib/pacman/db.lck; ";
       fetch = "curl -fsS";
+    };
+
+    debian = {
+      image = pkgs.fetchurl {
+        url = "https://cloud.debian.org/images/cloud/trixie/20260914-2601/debian-13-genericcloud-amd64-20260914-2601.qcow2";
+        sha512 = "95e110dfcdbd0ed8a82a75ed9579802f9950cabf51a810dcc6388e81bc778188713878b9f28d583a0ea602fbf48b35996ae9ad37f584166d8fbd6489df248f53";
+      };
+      packages = lib.unique cfg.debian.packages;
+      nixPackages = [ ];
+      writeFiles = cfg.debian.writeFiles;
+      runcmd = cfg.debian.runcmd;
+      adminGroup = "sudo";
+      shell = "/bin/bash";
+      console = systemdConsole;
+      installed = "dpkg-query -W ${lib.escapeShellArgs packages} >/dev/null";
+      recover = "dpkg --configure -a; ";
+      fetch = pyFetch;
+    };
+
+    fedora = dnfDistro {
+      image = pkgs.fetchurl {
+        url = "https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2";
+        sha256 = "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f";
+      };
+      repos = [ "fedora" ];
+    };
+
+    rocky = dnfDistro {
+      image = pkgs.fetchurl {
+        url = "https://dl.rockylinux.org/pub/rocky/10.2/images/x86_64/Rocky-10-GenericCloud-Base-10.2-20260525.0.x86_64.qcow2";
+        sha256 = "9fc9e9ff16888bb68ac39b0392e25c9c92684d50c85f1cce6ab549363bbc4b48";
+      };
+      repos = [ "vms-baseos" "vms-appstream" ];
+      pin = [ (pinnedDnf {
+        name = "Rocky Linux 10.2";
+        key = "RPM-GPG-KEY-Rocky-10";
+        urls = [ "https://dl.rockylinux.org/pub/rocky/10.2" "https://dl.rockylinux.org/vault/rocky/10.2" ];
+      }) ];
+    };
+
+    alma = dnfDistro {
+      image = pkgs.fetchurl {
+        url = "https://repo.almalinux.org/almalinux/10.2/cloud/x86_64/images/AlmaLinux-10-GenericCloud-10.2-20260817.0.x86_64.qcow2";
+        sha256 = "bc59485c4828861a15887e30ff1bb913f0f16202fd7286208518f4814da1e10a";
+      };
+      repos = [ "vms-baseos" "vms-appstream" ];
+      pin = [ (pinnedDnf {
+        name = "AlmaLinux 10.2";
+        key = "RPM-GPG-KEY-AlmaLinux-10";
+        urls = [ "https://repo.almalinux.org/almalinux/10.2" "https://vault.almalinux.org/10.2" ];
+      }) ];
+    };
+
+    opensuse = {
+      image = pkgs.fetchurl {
+        url = "https://download.opensuse.org/distribution/leap/16.0/appliances/Leap-16.0-Minimal-VM.x86_64-Cloud-Build18.68.qcow2";
+        sha256 = "6cd286b06cb065ed65287d3b86cf2676b5972eabe4792c2c841f2a40a33138d6";
+      };
+      packages = lib.unique cfg.opensuse.packages;
+      nixPackages = [ ];
+      writeFiles = [ ];
+      runcmd = [ ];
+      adminGroup = "wheel";
+      shell = "/bin/bash";
+      console = systemdConsole;
+      installed = "rpm -q ${lib.escapeShellArgs packages} >/dev/null";
+      recover = "";
+      fetch = pyFetch;
     };
 
     alpine = {
@@ -125,7 +248,7 @@ let
       # since the Nix closure step below uses what busybox's lack.
       packages = lib.unique ([ "sudo" "shadow" "tar" "findutils" ] ++ cfg.alpine.packages);
       nixPackages = [ ];
-      writeFiles = [
+      writeFiles = cfg.alpine.writeFiles ++ [
         {
           path = "/usr/local/sbin/vms-autologin";
           permissions = "0755";
@@ -135,7 +258,7 @@ let
           '';
         }
       ];
-      runcmd = [ ];
+      runcmd = cfg.alpine.runcmd;
       adminGroup = "wheel";
       # No bash until something installs it; zsh's plugin moves the user on.
       shell = "/bin/sh";
@@ -143,6 +266,10 @@ let
       console = {
         files = [ ];
         runcmd = [
+          # cloud-init's lock_passwd leaves the password field "!", which
+          # OpenSSH without PAM (Alpine's) reads as a locked account and
+          # refuses even key logins for. "*": still no password, not locked.
+          [ "sed" "-i" "s/^${cfg.user}:![^:]*:/${cfg.user}:*:/" "/etc/shadow" ]
           [
             "sh"
             "-c"
@@ -185,9 +312,9 @@ let
   # <name>.lock.json, next to the machine's file (see lib/default.nix),
   # written by `vm lock`: the packages it was resolved for, and every .deb
   # that takes on top of the image. Ubuntu only.
-  lock = if isUbuntu && builtins.pathExists lockFile then builtins.fromJSON (builtins.readFile lockFile) else null;
+  lock = if isApt && builtins.pathExists lockFile then builtins.fromJSON (builtins.readFile lockFile) else null;
   lockProblem =
-    if !isUbuntu || packages == [ ] then null
+    if !isApt || packages == [ ] then null
     else if lock == null then "has no machines/${cfg.name}.lock.json"
     else if lib.sort lib.lessThan lock.packages != lib.sort lib.lessThan packages
     then "machines/${cfg.name}.lock.json was resolved for other packages"
@@ -198,7 +325,7 @@ let
     mkdir -p $out
     ${lib.concatMapStrings (deb: ''
       ln -s ${pkgs.fetchurl ({
-        urls = [ "${aptPool}/${deb.path}" "${aptSnapshot}/${deb.path}" ];
+        urls = aptUrls deb.path;
       } // lib.getAttrs (lib.intersectLists [ "sha256" "sha512" ] (lib.attrNames deb)) deb)} $out/${deb.file}
     '') (lib.optionals (lockProblem == null && lock != null) lock.debs)}
     ${lib.optionalString nixPackages "ln -s ${nixClosure} $out/nix-closure.tar"}
@@ -236,14 +363,27 @@ let
     "-o Dir::Etc::SourceParts=/etc/vms/apt/empty.d"
     "-o Dir::State::Lists=/var/lib/vms/apt-lists"
   ];
-  installPackages = {
-    ubuntu = [
+  aptInstall = [
       "sh" "-c"
       (lib.concatStringsSep " && " [
         "mkdir -p /etc/vms/apt/empty.d /var/lib/vms/apt-lists/partial"
         "echo 'deb [trusted=yes] @DEBS_URL@ ./' > /etc/vms/apt/local.list"
         "apt-get ${localApt} update"
         "DEBIAN_FRONTEND=noninteractive apt-get ${localApt} -o Dpkg::Options::=--force-confold install -y ${lib.escapeShellArgs packages}"
+      ])
+    ];
+  installPackages = {
+    ubuntu = aptInstall;
+    debian = aptInstall;
+    fedora = [ "sh" "-c" distro.install ];
+    rocky = [ "sh" "-c" distro.install ];
+    alma = [ "sh" "-c" distro.install ];
+    # Leap's release repo only, as its own repo - not the image's update one.
+    opensuse = [
+      "sh" "-c"
+      (lib.concatStringsSep " && " [
+        "{ zypper lr vms-oss >/dev/null 2>&1 || zypper --non-interactive ar -f https://download.opensuse.org/distribution/leap/16.0/repo/oss/ vms-oss; }"
+        "zypper --non-interactive --gpg-auto-import-keys install --from vms-oss ${lib.escapeShellArgs packages}"
       ])
     ];
     # The keyring first (the image's pacman-init does it on first boot, and
@@ -268,6 +408,12 @@ let
     "sh" "-c"
     (lib.concatStringsSep " && " [
       "${distro.fetch} @DEBS_URL@nix-closure.tar | tar -xf - -C /"
+      # SELinux (Fedora, Rocky, Alma, openSUSE): a new /nix takes the root
+      # directory's root_t, which sshd may not even read - it then calls the
+      # zsh login shell there missing, and turns the user away. The labels
+      # the same files would have under /usr instead: usr_t, and bin_t for
+      # programs.
+      "if command -v selinuxenabled >/dev/null && selinuxenabled; then chcon -R -t usr_t /nix && find /nix/store -mindepth 2 -maxdepth 2 -name bin -exec chcon -R -t bin_t {} +; fi"
       "find /usr/local/bin -lname '${nixProfile}/*' -delete"
       "for bin in ${nixEnv}/bin/*; do ln -sf ${nixProfile}/bin/\"\${bin##*/}\" /usr/local/bin/; done"
       "mkdir -p ${dirOf nixProfile}"

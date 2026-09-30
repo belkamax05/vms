@@ -5,6 +5,8 @@
 {
   imports = [ ./desktop.nix ];
 
+  desktop.displayManager = "cosmic-greeter";
+
   nixos.modules = [{
     services.desktopManager.cosmic.enable = true;
     services.displayManager.cosmic-greeter.enable = true;

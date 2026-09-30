@@ -234,7 +234,7 @@ export const MachinesView = ({
   };
 
   const relock = (status: MachineStatus | undefined) => {
-    if (!status || working || status.meta?.os === 'nixos') return;
+    if (!status || working || !status.meta?.apt) return;
     onHandoff({
       type: 'run',
       command: vmCommand(['lock', status.name], 'always'),
@@ -380,7 +380,7 @@ export const MachinesView = ({
             ? []
             : [{ hotkey: 'c', label: 'Console', onPress: () => console_(status) }]),
         ];
-    if (status.meta?.os !== 'nixos')
+    if (status.meta?.apt)
       actions.push({ hotkey: 'l', label: 'Lock', onPress: () => relock(status) });
     if (status.publicKey) {
       actions.push({ hotkey: 'g', label: 'Add to GitHub', onPress: () => addToGithub(status) });
@@ -448,7 +448,7 @@ export const MachinesView = ({
                   ? `${meta.os} · user ${meta.user}${meta.gui ? ' · desktop in its own window' : ' · serial console'}`
                   : 'Not built yet - [u] builds and boots it'}
               </Text>
-              {meta && meta.os !== 'nixos' && (
+              {meta?.apt && (
                 <Text
                   color={status.hasLockFile && !status.lockStale ? colors.muted : colors.warn}
                   wrap="truncate"

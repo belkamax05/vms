@@ -8,16 +8,22 @@
     # For NixOS machines with `nixos.channel = "unstable"` only - pinned in
     # flake.lock like everything else, and fetched only when one is built.
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Steam's gaming mode for NixOS (plugins/steam.nix), on the unstable
+    # nixpkgs it follows - fetched only when a machine uses it.
+    jovian = {
+      url = "github:Jovian-Experiments/Jovian-NixOS";
+      inputs.nixpkgs.follows = "nixpkgs-unstable";
+    };
     nixGL = {
       url = "github:nix-community/nixGL";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-unstable, nixGL }:
+  outputs = { self, nixpkgs, nixpkgs-unstable, jovian, nixGL }:
     let
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      vmsLib = import ./lib { inherit nixpkgs nixpkgs-unstable nixGL; };
+      vmsLib = import ./lib { inherit nixpkgs nixpkgs-unstable jovian nixGL; };
       machines = vmsLib.mkMachines ./machines // vmsLib.mkRecipes vmsLib.catalog ./recipes;
     in
     {

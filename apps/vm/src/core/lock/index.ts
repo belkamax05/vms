@@ -72,7 +72,7 @@ const isTracked = (repo: Repo, path: string) =>
  */
 export const ensureLocked = async (repo: Repo, name: string, log: Log, onOutput?: Log) => {
   const { meta } = await prepare(repo, name, log, onOutput);
-  if (meta?.os !== 'ubuntu' || !meta.packages.length) return;
+  if (!meta?.apt || !meta.packages.length) return;
   const target = lockFile(repo, name);
   if (existsSync(target) && !isLockStale(target, meta)) return;
   log(`${name}: its apt packages changed since the lockfile - locking them again...`);
@@ -159,7 +159,7 @@ export const lock = async (repo: Repo, name: string, log: Log, onOutput?: Log) =
       const [path = '', sha256 = ''] = line.split(' ');
       return { file: path.split('/').pop() ?? path, path, sha256 };
     });
-    if (!debs.length) throw new VmError(`apt's plan for ${packages.join(' ')} had no .debs in it`);
+    // No .debs: every package is in the image already - a lockfile that pins nothing more.
 
     const target = lockFile(repo, name);
     writeFileSync(`${target}.tmp`, formatLock(snapshot, packages, debs));

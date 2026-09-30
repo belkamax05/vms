@@ -23,6 +23,7 @@ import {
   readRecipe,
   recipeProblems,
   saveRecipe,
+  unavailable,
 } from './core/recipes';
 import { currentRepo, hasMachine, machineNames, type Repo } from './core/repo';
 
@@ -203,6 +204,12 @@ export const run = async (...argv: string[]) => {
           const value = number(flag);
           if (value !== undefined) recipe[key] = value;
         }
+        // Defaults the chosen OS can't have (Nix on Alpine) go, as in the wizard; only what
+        // was asked for by name can make the recipe fail.
+        const asked = new Set(list('--features'));
+        recipe.features = recipe.features.filter(
+          (id) => asked.has(id) || !unavailable(catalog, recipe, id),
+        );
         const problems = recipeProblems(catalog, recipe);
         if (problems.length) throw new VmError(`that recipe can't build: ${problems.join('; ')}`);
         log(`${name}: ${saveRecipe(repo, name, recipe)}`);

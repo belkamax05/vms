@@ -1,12 +1,13 @@
 # Git repos cloned into the guest user's home, over SSH with the machine's
 # own vm-ssh key - which GitHub only takes once it's added there, so this
-# can't happen on first boot. Instead, every desktop login runs repos.sh: with
-# every repo cloned it exits and no window opens; otherwise a terminal shows
+# can't happen on first boot. Instead, every login runs repos.sh - a desktop
+# login in a window of its own, a console or SSH login in its own terminal:
+# with every repo cloned it exits and nothing opens; otherwise the terminal shows
 # the key to add on GitHub, waits for Space until GitHub accepts it, clones
 # what's missing and closes. A clone refused for SAML SSO waits the same way,
 # for the key to be authorized for that org. Either way the right GitHub page
 # opens in the host's browser (the guest has none), through lib/default.nix's
-# hostRequests. Needs a desktop (the gui plugin).
+# hostRequests, which needs no desktop either.
 #
 #   repos = [ { url = "git@github.com:owner/repo.git"; dir = "src/repo"; } ];
 #
@@ -20,6 +21,15 @@ let
   script = builtins.replaceStrings [ "@REPOS@" ]
     [ (lib.concatMapStringsSep "\n" (repo: "${repo.url} ${repo.dir}") config.repos) ]
     (builtins.readFile ./repos.sh);
+
+  # A console or SSH login: the script in that terminal. Only an interactive
+  # one - not `ssh host command`, not a desktop's own non-interactive
+  # /etc/profile - and it returns at once when there's nothing to clone.
+  loginHook = exec: ''
+    case $- in
+      *i*) [ -t 0 ] && [ -x ${exec} ] && ${exec} --in-terminal ;;
+    esac
+  '';
 
   autostart = exec: ''
     [Desktop Entry]
@@ -56,7 +66,7 @@ in
   };
 
   config = {
-    ubuntu.writeFiles = [
+    cloud.writeFiles = [
       {
         path = "/usr/local/bin/vms-repos";
         content = script;
@@ -65,6 +75,12 @@ in
       {
         path = "/etc/xdg/autostart/vms-repos.desktop";
         content = autostart "/usr/local/bin/vms-repos";
+      }
+      # /etc/profile sources it in every login shell - zsh's too, through the
+      # zsh plugin's ~/.zprofile.
+      {
+        path = "/etc/profile.d/vms-repos.sh";
+        content = loginHook "/usr/local/bin/vms-repos";
       }
       {
         path = "/etc/ssh/ssh_known_hosts";
@@ -75,6 +91,7 @@ in
     nixos.modules = [{
       environment.etc."xdg/autostart/vms-repos.desktop".text =
         autostart "${pkgs.writeScript "vms-repos" script}";
+      environment.loginShellInit = loginHook "${pkgs.writeScript "vms-repos" script}";
       programs.ssh.knownHosts = lib.listToAttrs (lib.imap0
         (i: key: lib.nameValuePair "github-${toString i}" {
           hostNames = [ "github.com" ];

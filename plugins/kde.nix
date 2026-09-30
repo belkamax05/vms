@@ -13,8 +13,15 @@ in
 {
   imports = [ ./desktop.nix ];
 
-  ubuntu = {
-    packages = [ "kde-plasma-desktop" ];
+  desktop.displayManager = "sddm";
+
+  ubuntu.packages = [ "kde-plasma-desktop" ];
+  debian.packages = [ "kde-plasma-desktop" "sddm" ];
+  arch.packages = [ "plasma-desktop" "sddm" "konsole" ];
+  alpine.packages = [ "plasma-desktop" "sddm" "konsole" ];
+
+  # The same on every distro.
+  cloud = {
     writeFiles = [
       {
         path = "/etc/sddm.conf.d/vms-autologin.conf";

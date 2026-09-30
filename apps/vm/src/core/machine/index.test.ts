@@ -16,8 +16,25 @@ test('readMeta reads the runner meta lib/default.nix writes, shell quoting and a
     os: 'ubuntu',
     user: 'maksym',
     gui: true,
+    // A build from before the apt flag: Ubuntu was the one apt guest.
+    apt: true,
     packages: ['ubuntu-desktop-minimal', 'dconf-cli', 'git'],
   });
+});
+
+test('readMeta: the apt flag, for any apt guest', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vm-meta-'));
+  mkdirSync(join(dir, 'runner'));
+  writeFileSync(
+    join(dir, 'runner', 'meta'),
+    "os=debian\nuser=maksym\ngui=false\napt=true\npackages='curl xz-utils'\n",
+  );
+  expect(readMeta(dir)?.apt).toBe(true);
+  writeFileSync(
+    join(dir, 'runner', 'meta'),
+    "os=fedora\nuser=maksym\ngui=false\napt=false\npackages=''\n",
+  );
+  expect(readMeta(dir)?.apt).toBe(false);
 });
 
 test('readMeta: no packages, and no build at all', () => {

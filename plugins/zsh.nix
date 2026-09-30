@@ -58,6 +58,22 @@ in
         path = "/etc/zshrc.d/zoxide.zsh";
         content = zoxideHook;
       }
+      # Every zsh reads /etc/zshenv - `ssh host command` and scripts too, not
+      # only interactive shells. /usr/local/bin, where the Nix-built tools
+      # are linked, isn't on every distro's command PATH (openSUSE's); and
+      # Nix, when installed, puts itself on PATH only from /etc/zshrc.
+      {
+        path = "/etc/zshenv";
+        content = ''
+          case ":$PATH:" in
+            *:/usr/local/bin:*) ;;
+            *) PATH=/usr/local/bin:$PATH ;;
+          esac
+          if [ -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
+            . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+          fi
+        '';
+      }
     ];
     runcmd = [
       # Only once zsh is really there: a login shell that doesn't exist locks

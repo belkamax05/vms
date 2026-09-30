@@ -34,6 +34,23 @@ in
             BACKSPACE="guess"
           '';
         }
+      ];
+    };
+
+    # Every distro alike.
+    cloud = {
+      writeFiles = [
+        # X (XFCE on Alpine, which has no /etc/default/keyboard).
+        {
+          path = "/etc/X11/xorg.conf.d/00-keyboard.conf";
+          content = ''
+            Section "InputClass"
+              Identifier "vms keyboard"
+              MatchIsKeyboard "on"
+              Option "XkbLayout" "${layout}"
+            EndSection
+          '';
+        }
         # GNOME - applied by desktop.nix's `dconf update`, with the profile
         # gui.nix writes.
         {

@@ -79,6 +79,11 @@ const check = (on: boolean) => (on ? '[x]' : '[ ]');
 const FAMILY_NAMES: Record<string, string> = {
   ubuntu: 'Ubuntu',
   nixos: 'NixOS',
+  debian: 'Debian',
+  fedora: 'Fedora',
+  rocky: 'Rocky Linux',
+  alma: 'AlmaLinux',
+  opensuse: 'openSUSE',
   arch: 'Arch Linux',
   alpine: 'Alpine Linux',
 };

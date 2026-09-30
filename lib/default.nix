@@ -9,7 +9,7 @@
 #                ~/.ssh/id_ed25519 on every boot)
 #   meta         shell-sourceable facts about it (os, user, gui, and the
 #                apt packages `vm lock` resolves - none on NixOS)
-{ nixpkgs, nixpkgs-unstable, nixGL }:
+{ nixpkgs, nixpkgs-unstable, jovian, nixGL }:
 
 let
   inherit (nixpkgs) lib;
@@ -64,10 +64,13 @@ rec {
     let
       cfg = (lib.evalModules {
         modules = [ ./options.nix module { inherit name; } ];
-        specialArgs = { vms = ../.; inherit pkgs; };
+        specialArgs = { vms = ../.; inherit pkgs; jovianModule = jovian.nixosModules.default; };
       }).config;
 
       lockFile = dir + "/${name}.lock.json";
+
+      # The apt guests' packages - what `vm lock` locks; null elsewhere.
+      aptPackages = { ubuntu = cfg.ubuntu.packages; debian = cfg.debian.packages; }.${cfg.os} or null;
 
       mkRunner = { script, runtimeInputs ? [ ] }:
         let
@@ -93,11 +96,13 @@ rec {
           user=${cfg.user}
           gui=${lib.boolToString cfg.gui}
           github_user=${lib.escapeShellArg (if cfg.github.user == null then "" else cfg.github.user)}
-          packages=${lib.escapeShellArg (lib.concatStringsSep " " (lib.optionals (cfg.os == "ubuntu") (lib.unique cfg.ubuntu.packages)))}
+          apt=${lib.boolToString (aptPackages != null)}
+          packages=${lib.escapeShellArg (lib.concatStringsSep " " (lib.unique (if aptPackages == null then [ ] else aptPackages)))}
           EOF
         '';
 
-      builder = { ubuntu = ./cloud.nix; arch = ./cloud.nix; alpine = ./cloud.nix; nixos = ./nixos.nix; }.${cfg.os};
+      # NixOS is built here; everything else boots its distro's cloud image.
+      builder = if cfg.os == "nixos" then ./nixos.nix else ./cloud.nix;
     in
     import builder {
       inherit pkgs lib cfg mkRunner lockFile hostRequests;

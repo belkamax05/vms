@@ -36,7 +36,9 @@ export interface Meta {
   os: string;
   user: string;
   gui: boolean;
-  /** The apt packages `vm lock` resolves. None on NixOS. */
+  /** An apt guest (Ubuntu, Debian): its packages are locked, .deb by .deb. */
+  apt: boolean;
+  /** The apt packages `vm lock` resolves. None anywhere else. */
   packages: string[];
   /** The GitHub account vm-ssh goes on (`github.user`); gh's active one when unset. */
   githubUser?: string;
@@ -84,6 +86,8 @@ export const readMeta = (dir: string): Meta | undefined => {
     os: values.os ?? '',
     user: values.user ?? '',
     gui: values.gui === 'true',
+    // Builds from before the flag: Ubuntu was the one apt guest.
+    apt: values.apt ? values.apt === 'true' : values.os === 'ubuntu',
     packages: (values.packages ?? '').split(/\s+/).filter(Boolean),
     githubUser: values.github_user || undefined,
   };

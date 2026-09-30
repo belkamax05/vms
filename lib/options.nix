@@ -9,6 +9,25 @@
 
 let
   inherit (lib) mkOption types;
+
+  # A distro's own packages, files and commands - on that distro only.
+  distroHalf = packages: distro: {
+    packages = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      description = packages;
+    };
+    writeFiles = mkOption {
+      type = types.listOf (types.attrsOf types.anything);
+      default = [ ];
+      description = "cloud-init write_files entries, on ${distro} only.";
+    };
+    runcmd = mkOption {
+      type = types.listOf (types.either types.str (types.listOf types.str));
+      default = [ ];
+      description = "cloud-init runcmd entries, on ${distro} only.";
+    };
+  };
 in
 {
   options = {
@@ -18,7 +37,7 @@ in
     };
 
     os = mkOption {
-      type = types.enum [ "ubuntu" "arch" "alpine" "nixos" ];
+      type = types.enum [ "ubuntu" "debian" "fedora" "rocky" "alma" "opensuse" "arch" "alpine" "nixos" ];
     };
 
     cpus = mkOption {
@@ -142,16 +161,41 @@ in
       };
     };
 
-    arch.packages = mkOption {
+    arch = distroHalf "pacman packages, from the Arch Linux Archive for the image's day (lib/cloud.nix)." "Arch";
+
+    # Debian's own half: its apt packages are locked like Ubuntu's
+    # (`vm lock`), from Debian's archive and snapshot.debian.org.
+    debian = distroHalf "apt packages, locked in <name>.lock.json like Ubuntu's (lib/cloud.nix)." "Debian";
+
+    # Fedora, Rocky and AlmaLinux share package names for what plugins need.
+    dnf.packages = mkOption {
       type = types.listOf types.str;
       default = [ ];
-      description = "pacman packages, from the Arch Linux Archive for the image's day (lib/cloud.nix).";
+      description = "dnf packages, on Fedora, Rocky and AlmaLinux - each from its pinned release (lib/cloud.nix).";
     };
 
-    alpine.packages = mkOption {
+    opensuse.packages = mkOption {
       type = types.listOf types.str;
       default = [ ];
-      description = "apk packages, from the image's stable branch (lib/cloud.nix).";
+      description = "zypper packages, from openSUSE Leap's release repo (lib/cloud.nix).";
+    };
+
+    alpine = {
+      packages = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        description = "apk packages, from the image's stable branch (lib/cloud.nix).";
+      };
+      writeFiles = mkOption {
+        type = types.listOf (types.attrsOf types.anything);
+        default = [ ];
+        description = "cloud-init write_files entries, on Alpine only.";
+      };
+      runcmd = mkOption {
+        type = types.listOf (types.either types.str (types.listOf types.str));
+        default = [ ];
+        description = "cloud-init runcmd entries, on Alpine only - OpenRC, not systemd.";
+      };
     };
 
     nixos.channel = mkOption {

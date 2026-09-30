@@ -5,8 +5,34 @@
 {
   imports = [ ./desktop.nix ];
 
-  ubuntu = {
-    packages = [ "xfce4" "lightdm" "lightdm-gtk-greeter" ];
+  desktop.displayManager = "lightdm";
+
+  ubuntu.packages = [ "xfce4" "lightdm" "lightdm-gtk-greeter" ];
+  debian.packages = [ "xfce4" "lightdm" "lightdm-gtk-greeter" ];
+  # Arch's `xfce4` is a group: its parts by name, as for GNOME.
+  arch = {
+    packages = [
+      "xorg-server"
+      "xfce4-session"
+      "xfwm4"
+      "xfce4-panel"
+      "xfdesktop"
+      "xfce4-settings"
+      "thunar"
+      "xfce4-terminal"
+      "lightdm"
+      "lightdm-gtk-greeter"
+    ];
+    # As on Alpine: LightDM's autologin PAM stack admits the `autologin` group.
+    runcmd = [ [ "sh" "-c" "groupadd -rf autologin; gpasswd -a ${config.user} autologin" ] ];
+  };
+  alpine = {
+    packages = [ "xfce4" "xfce4-terminal" "lightdm" "lightdm-gtk-greeter" ];
+    # LightDM's autologin PAM stack admits the `autologin` group's members.
+    runcmd = [ [ "sh" "-c" "addgroup -S autologin 2>/dev/null; addgroup ${config.user} autologin" ] ];
+  };
+
+  cloud = {
     writeFiles = [{
       path = "/etc/lightdm/lightdm.conf.d/50-vms-autologin.conf";
       content = ''

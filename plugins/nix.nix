@@ -13,18 +13,23 @@ in
   # What the official installer needs to fetch and unpack itself.
   ubuntu.packages = [ "curl" "xz-utils" ];
   arch.packages = [ "curl" "xz" ];
+  debian.packages = [ "curl" "xz-utils" ];
+  dnf.packages = [ "curl" "xz" ];
+  opensuse.packages = [ "curl" "xz" ];
 
-  # Ubuntu and Arch - Alpine has no systemd for the daemon install, so the
-  # catalog doesn't offer Nix there.
+  # Every systemd guest - Alpine has no systemd for the daemon install, so
+  # the catalog doesn't offer Nix there.
   cloud = {
     # Not written to /etc/nix/nix.conf directly: the installer writes that
     # file itself and would replace it. It appends this one instead.
-    writeFiles = [{
-      path = "/var/lib/vms/nix-extra.conf";
-      content = ''
-        experimental-features = nix-command flakes
-      '';
-    }];
+    writeFiles = [
+      {
+        path = "/var/lib/vms/nix-extra.conf";
+        content = ''
+          experimental-features = nix-command flakes
+        '';
+      }
+    ];
     # HOME: cloud-init's runcmd runs without it, and the installer refuses
     # to start unset.
     runcmd = [

@@ -39,6 +39,11 @@ let
         family = "ubuntu";
         base = { imports = [ ../machines/ubuntu.nix ]; ubuntu.release = "24.04"; };
       };
+      debian = { label = "Debian 13"; family = "debian"; base = ../machines/debian.nix; };
+      fedora = { label = "Fedora 44"; family = "fedora"; base = ../machines/fedora.nix; };
+      rocky = { label = "Rocky Linux 10.2"; family = "rocky"; base = ../machines/rocky.nix; };
+      alma = { label = "AlmaLinux 10.2"; family = "alma"; base = ../machines/alma.nix; };
+      opensuse = { label = "openSUSE Leap 16.0"; family = "opensuse"; base = ../machines/opensuse.nix; };
       arch = { label = "Arch Linux"; family = "arch"; base = ../machines/arch.nix; };
       alpine = { label = "Alpine 3.24"; family = "alpine"; base = ../machines/alpine.nix; };
       nixos = { label = "NixOS 26.05"; family = "nixos"; base = ../machines/nixos.nix; };
@@ -50,11 +55,18 @@ let
     };
 
     desktops = {
-      gnome = { label = "GNOME"; module = ../plugins/gui.nix; os = [ "ubuntu" "nixos" ]; default = true; };
-      kde = { label = "KDE Plasma"; module = ../plugins/kde.nix; os = [ "ubuntu" "nixos" ]; };
-      xfce = { label = "XFCE"; module = ../plugins/xfce.nix; os = [ "ubuntu" "nixos" ]; };
+      gnome = { label = "GNOME"; module = ../plugins/gui.nix; os = [ "ubuntu" "debian" "arch" "alpine" "nixos" ]; default = true; };
+      kde = { label = "KDE Plasma"; module = ../plugins/kde.nix; os = [ "ubuntu" "debian" "arch" "alpine" "nixos" ]; };
+      xfce = { label = "XFCE"; module = ../plugins/xfce.nix; os = [ "ubuntu" "debian" "arch" "alpine" "nixos" ]; };
       cinnamon = { label = "Cinnamon"; module = ../plugins/cinnamon.nix; os = [ "ubuntu" "nixos" ]; };
       cosmic = { label = "COSMIC"; module = ../plugins/cosmic.nix; os = [ "nixos" ]; };
+      sway = { label = "Sway"; module = ../plugins/sway.nix; os = [ "ubuntu" "debian" "alpine" "nixos" ]; };
+      hyprland = { label = "Hyprland"; module = ../plugins/hyprland.nix; os = [ "ubuntu" "alpine" "nixos" ]; };
+      lxqt = { label = "LXQt"; module = ../plugins/lxqt.nix; os = [ "ubuntu" "debian" "alpine" "nixos" ]; };
+      mate = { label = "MATE"; module = ../plugins/mate.nix; os = [ "ubuntu" "debian" "alpine" "nixos" ]; };
+      budgie = { label = "Budgie"; module = ../plugins/budgie.nix; os = [ "ubuntu" "debian" "nixos" ]; };
+      pantheon = { label = "Pantheon"; module = ../plugins/pantheon.nix; os = [ "nixos" ]; };
+      steam = { label = "Steam (gaming mode)"; module = ../plugins/steam.nix; os = [ "nixos" ]; };
     };
 
     features = {
@@ -93,8 +105,10 @@ let
         module = ../plugins/nix.nix;
         default = true;
         builtinOn = [ "nixos" ];
-        # Alpine: OpenRC, and the official installer's daemon mode needs systemd.
-        os = [ "ubuntu" "arch" "nixos" ];
+        # Not Alpine: OpenRC, and the official installer's daemon mode needs
+        # systemd. Not the SELinux distros (Fedora, Rocky, Alma, openSUSE):
+        # the installer refuses SELinux outright.
+        os = [ "ubuntu" "debian" "arch" "nixos" ];
       };
       direnv = {
         label = "direnv";
@@ -102,7 +116,9 @@ let
         group = "Environment";
         module = ../plugins/direnv.nix;
         requires = [ "zsh" ];
-        requiresOn = { ubuntu = [ "nix" ]; arch = [ "nix" ]; };
+        # Where Nix can be installed and isn't the system itself; elsewhere
+        # direnv runs without it, for .envrc files that don't `use nix`.
+        requiresOn = lib.genAttrs [ "ubuntu" "debian" "arch" ] (_: [ "nix" ]);
         default = true;
       };
     };
