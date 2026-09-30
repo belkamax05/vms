@@ -524,10 +524,13 @@ export const ssh = async (name: string, command: string[], log: Log) => {
 
 /** Power it off (SIGTERM to QEMU) and wait until it is gone. Nothing to do when it isn't running. */
 export const down = async (name: string) => {
-  const pid = pidOf(name);
-  if (!pid) return;
-  process.kill(pid);
-  while (isAlive(pid)) await Bun.sleep(200);
+  // A `vm lock` scratch VM too (<state>/lock): its own process kills it when done, but not
+  // when that process died first - left running, it would outlive even `vm kill`.
+  for (const pid of [pidOf(name), pidIn(join(stateDir(name), 'lock'))]) {
+    if (!pid) continue;
+    process.kill(pid);
+    while (isAlive(pid)) await Bun.sleep(200);
+  }
 };
 
 const githubUserOf = (name: string) => readMeta(stateDir(name))?.githubUser;

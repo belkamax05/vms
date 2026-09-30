@@ -116,7 +116,8 @@ export const lock = async (repo: Repo, name: string, log: Log, onOutput?: Log) =
   process.once('SIGTERM', onSignal);
 
   try {
-    rmSync(scratch, { recursive: true, force: true });
+    // One an earlier `vm lock` left running when its process died.
+    cleanup();
     mkdirSync(scratch, { recursive: true });
     const port = await firstFreePort();
     writeFileSync(join(scratch, 'ssh-port'), `${port}\n`);
