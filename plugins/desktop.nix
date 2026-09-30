@@ -59,8 +59,25 @@
     ];
 
     # Debian: as Ubuntu - its packages make their display manager the
-    # display-manager.service - without Ubuntu's snap stubs to keep out.
+    # display-manager.service - without Ubuntu's snap stubs to keep out. But
+    # the cloud image's kernel (-cloud-amd64) has no GPU drivers at all: no
+    # /dev/dri, so no seat that can show a desktop. Debian's regular kernel
+    # replaces it, and first boot reboots into it once - the steps still to
+    # run are run again after (lib/cloud.nix's bootcmd), this one then a
+    # no-op.
+    debian.packages = [ "linux-image-amd64" ];
     debian.runcmd = [
+      [
+        "sh"
+        "-c"
+        (lib.concatStringsSep "; " [
+          "uname -r | grep -q -- -cloud- || exit 0"
+          "echo 'linux-base linux-base/removing-running-kernel boolean false' | debconf-set-selections"
+          "dpkg-query -W -f '\${Package}\\n' 'linux-image-*cloud*' | xargs env DEBIAN_FRONTEND=noninteractive apt-get purge -y"
+          "update-grub"
+          "systemctl reboot"
+        ])
+      ]
       [ "sh" "-c" "if command -v dconf >/dev/null; then dconf update; fi" ]
       [ "systemctl" "set-default" "graphical.target" ]
       [ "systemctl" "start" "--no-block" "display-manager.service" ]

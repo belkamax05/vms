@@ -8,9 +8,11 @@
   # A VM's virtual GPU has no hardware cursor plane.
   greetd.session = "env WLR_NO_HARDWARE_CURSORS=1 sway";
 
-  ubuntu.packages = [ "sway" "foot" ];
-  debian.packages = [ "sway" "foot" ];
-  alpine.packages = [ "sway" "foot" ];
+  # swaybg draws the default config's wallpaper - only recommended by sway,
+  # which Alpine doesn't install, leaving the desktop black behind the bar.
+  ubuntu.packages = [ "sway" "swaybg" "foot" ];
+  debian.packages = [ "sway" "swaybg" "foot" ];
+  alpine.packages = [ "sway" "swaybg" "foot" ];
 
   nixos.modules = [{
     programs.sway.enable = true;
