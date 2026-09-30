@@ -40,7 +40,7 @@ export interface CatalogFeature {
 export interface Catalog {
   /** `family` (ubuntu, nixos) is what features' `os`/`requiresOn` and desktops' `os` name. */
   os: Record<string, { label: string; family?: string }>;
-  desktops: Record<string, { label: string; os: string[] }>;
+  desktops: Record<string, { label: string; os: string[]; default?: boolean }>;
   features: Record<string, CatalogFeature>;
   /** Suggested nixpkgs names, by group. */
   tools: Record<string, string[]>;
@@ -48,14 +48,27 @@ export interface Catalog {
   keyboards: Record<string, string>;
   /** Tools ticked in a blank recipe. */
   defaultTools: string[];
+  /** The order tool groups are shown in; others after. */
+  toolOrder: string[];
   presets: Record<string, Recipe>;
 }
 
 /** Ubuntu for every Ubuntu release: what features and desktops say they run on. */
 export const familyOf = (catalog: Catalog, os: string) => catalog.os[os]?.family ?? os;
 
+/** The tool groups, in the catalog's `toolOrder`. */
+export const toolGroups = (catalog: Catalog): [string, string[]][] => {
+  const rank = (group: string) => {
+    const at = catalog.toolOrder.indexOf(group);
+    return at < 0 ? catalog.toolOrder.length : at;
+  };
+  return Object.entries(catalog.tools).sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
+};
+
 /** Every suggested tool, in group order. */
-export const allTools = (catalog: Catalog) => [...new Set(Object.values(catalog.tools).flat())];
+export const allTools = (catalog: Catalog) => [
+  ...new Set(toolGroups(catalog).flatMap(([, tools]) => tools)),
+];
 
 /**
  * The catalog as this code expects it, from whichever lib/catalog.nix the repo's flake has. The
@@ -72,6 +85,7 @@ export const normalizeCatalog = (raw: Partial<Record<keyof Catalog, unknown>>): 
     : ((raw.tools ?? {}) as Catalog['tools']),
   keyboards: (raw.keyboards ?? { us: 'English (US)' }) as Catalog['keyboards'],
   defaultTools: (raw.defaultTools ?? []) as string[],
+  toolOrder: (raw.toolOrder ?? []) as string[],
   presets: (raw.presets ?? {}) as Catalog['presets'],
 });
 
@@ -209,9 +223,11 @@ export const recipeProblems = (catalog: Catalog, recipe: Recipe): string[] => {
 /** A blank recipe: the catalog's default features, the first OS and desktop. */
 export const blankRecipe = (catalog: Catalog): Recipe => {
   const os = catalog.os.ubuntu ? 'ubuntu' : (Object.keys(catalog.os)[0] ?? 'ubuntu');
-  const desktop =
-    Object.entries(catalog.desktops).find(([, d]) => d.os.includes(familyOf(catalog, os)))?.[0] ??
-    null;
+  // The catalog's default desktop (GNOME) - not whichever sorts first.
+  const fits = Object.entries(catalog.desktops).filter(([, d]) =>
+    d.os.includes(familyOf(catalog, os)),
+  );
+  const desktop = (fits.find(([, d]) => d.default) ?? fits[0])?.[0] ?? null;
   const recipe: Recipe = { os, desktop, features: [], tools: [...catalog.defaultTools] };
   recipe.features = Object.entries(catalog.features)
     .filter(([id, feature]) => feature.default && !unavailable(catalog, recipe, id))

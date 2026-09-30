@@ -46,6 +46,7 @@ const catalog: Catalog = {
   tools: { 'Languages & build': ['bun'], 'Editors & git': ['lazygit'] },
   keyboards: { us: 'English (US)', pt: 'Portuguese' },
   defaultTools: ['bun'],
+  toolOrder: ['Languages & build'],
   presets: {},
 };
 

@@ -16,6 +16,7 @@ import { useColors } from '@/dev-tools/ui/providers/TuiThemeProvider';
 
 import {
   allTools,
+  toolGroups,
   blankRecipe,
   type Catalog,
   familyOf,
@@ -116,7 +117,8 @@ export const WizardView = ({
     if (!nameTyped) setName(freeName(repo, os));
   };
   const [step, setStep] = useState<StepId>('start');
-  const [cursor, setCursor] = useState(0);
+  /** null: on the step's current choice (or its first row) - where each step opens. */
+  const [cursor, setCursor] = useState<number | null>(null);
   const [note, setNote] = useState<string | undefined>();
 
   const steps = Object.keys(STEP_LABELS) as StepId[];
@@ -129,7 +131,7 @@ export const WizardView = ({
 
   const go = (target: StepId) => {
     setStep(target);
-    setCursor(0);
+    setCursor(null);
     setNote(undefined);
   };
   const next = () => {
@@ -373,7 +375,7 @@ export const WizardView = ({
       const suggested = allTools(catalog);
       const added = (recipe.tools ?? []).filter((tool) => !suggested.includes(tool));
       const groups: [string, string[]][] = [
-        ...Object.entries(catalog.tools),
+        ...toolGroups(catalog),
         ...(added.length ? [['Added', added] as [string, string[]]] : []),
       ];
       const toolRow = (group: string) => (tool: string) => {
@@ -397,9 +399,18 @@ export const WizardView = ({
           value: () => toggleTool(tool),
         };
       };
-      const environment = Object.keys(catalog.features).filter(
-        (id) => catalog.features[id]?.group === ENVIRONMENT,
-      );
+      // What the others build on first: Nix, then direnv.
+      const needed = (id: string) =>
+        Object.values(catalog.features).some(
+          (f) =>
+            f.requires?.includes(id) ||
+            Object.values(f.requiresOn ?? {})
+              .flat()
+              .includes(id),
+        );
+      const environment = Object.keys(catalog.features)
+        .filter((id) => catalog.features[id]?.group === ENVIRONMENT)
+        .sort((a, b) => Number(needed(b)) - Number(needed(a)));
       items = [
         ...(environment.length
           ? [
@@ -483,7 +494,8 @@ export const WizardView = ({
       break;
   }
 
-  const clamped = Math.min(cursor, Math.max(0, items.length - 1));
+  const currentAt = items.findIndex((item) => item.isCurrent);
+  const clamped = Math.min(cursor ?? Math.max(currentAt, 0), Math.max(0, items.length - 1));
   const selected = items[clamped]?.isHeader ? firstSelectable(items) : clamped;
   const current = items[selected];
 

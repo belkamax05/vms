@@ -21,6 +21,8 @@
 #   tools.<group>  nixpkgs attribute names the wizard suggests, grouped; any
 #                  other name works too
 #   defaultTools   the ones ticked in a blank recipe
+#   toolOrder      the order the groups are shown in (attribute sets have
+#                  none of their own); groups not in it come after
 #   keyboards.<id> keyboard layouts (XKB names) - what typing produces; the
 #                  interface stays English
 #   presets.<id>   recipes to start from
@@ -46,7 +48,7 @@ let
     };
 
     desktops = {
-      gnome = { label = "GNOME"; module = ../plugins/gui.nix; os = [ "ubuntu" "nixos" ]; };
+      gnome = { label = "GNOME"; module = ../plugins/gui.nix; os = [ "ubuntu" "nixos" ]; default = true; };
       kde = { label = "KDE Plasma"; module = ../plugins/kde.nix; os = [ "ubuntu" "nixos" ]; };
       xfce = { label = "XFCE"; module = ../plugins/xfce.nix; os = [ "ubuntu" "nixos" ]; };
       cinnamon = { label = "Cinnamon"; module = ../plugins/cinnamon.nix; os = [ "ubuntu" "nixos" ]; };
@@ -113,6 +115,7 @@ let
     };
 
     defaultTools = [ "bun" ];
+    toolOrder = [ "Languages & build" "Editors & git" "Search & files" "Terminal" "System" "AI" "Desktop apps" ];
 
     # English first: a recipe without `keyboard` gets it.
     keyboards = {
@@ -145,6 +148,7 @@ in
     tools = lib.zipAttrsWith (_: lists: lib.unique (lib.concatLists lists)) [ catalog.tools (extra.tools or { }) ];
     keyboards = catalog.keyboards // (extra.keyboards or { });
     defaultTools = lib.unique (catalog.defaultTools ++ (extra.defaultTools or [ ]));
+    toolOrder = lib.unique (catalog.toolOrder ++ (extra.toolOrder or [ ]));
     presets = catalog.presets // (extra.presets or { });
   };
 
@@ -152,6 +156,6 @@ in
     os = strip c.os;
     desktops = strip c.desktops;
     features = strip c.features;
-    inherit (c) tools defaultTools keyboards presets;
+    inherit (c) tools defaultTools toolOrder keyboards presets;
   };
 }
