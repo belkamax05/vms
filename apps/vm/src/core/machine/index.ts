@@ -256,6 +256,46 @@ export const flakeRef = (repo: Repo) =>
   (existsSync(join(repo.root, '.git')) ? `git+file://${repo.root}` : `path:${repo.root}`);
 
 /**
+ * Re-lock the repo's path inputs (vms-dfs' `vms`, the libs/vms submodule), when its flake.lock
+ * predates an input the submodule has since added - the lock pins a path input's own inputs too,
+ * and Nix won't add the new one by itself ("called without required argument"). Only path
+ * inputs: nothing fetched from anywhere moves. True when flake.lock changed, so the caller
+ * retries.
+ */
+export const relockPathInputs = (repo: Repo): boolean => {
+  const lockPath = join(repo.root, 'flake.lock');
+  if (!existsSync(lockPath)) return false;
+  const before = readFileSync(lockPath, 'utf8');
+  let names: string[];
+  try {
+    const lock = JSON.parse(before) as {
+      root: string;
+      nodes: Record<string, { inputs?: Record<string, string>; locked?: { type?: string } }>;
+    };
+    names = Object.entries(lock.nodes[lock.root]?.inputs ?? {})
+      .filter(([, node]) => typeof node === 'string' && lock.nodes[node]?.locked?.type === 'path')
+      .map(([name]) => name);
+  } catch {
+    return false;
+  }
+  if (!names.length) return false;
+  spawnSync('nix', ['flake', 'update', ...names, '--flake', repo.root], { stdio: 'ignore' });
+  return existsSync(lockPath) && readFileSync(lockPath, 'utf8') !== before;
+};
+
+/** The line of a Nix failure worth showing: its last `error:`, not the trace above it. */
+export const nixError = (stderr: string) => {
+  const lines = stderr
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const error = [...lines]
+    .reverse()
+    .find((line) => line.startsWith('error:') && line.length > 'error:'.length);
+  return (error ?? lines.slice(-2).join(' / ')).replace(/^error:\s*/, '');
+};
+
+/**
  * What `nix build` builds for the machine: the repo's own package, or - for a wizard recipe,
  * which lives outside the repo - that recipe against the repo's catalog (`lib.recipeMachine`),
  * which needs --impure to read it.
@@ -271,7 +311,18 @@ const buildTarget = (repo: Repo, name: string): string[] => {
   ];
 };
 
-export const build = (repo: Repo, name: string, onOutput?: Log) =>
+/** `buildOnce`, again after re-locking when the repo's lock was behind its submodule. */
+export const build = async (repo: Repo, name: string, onOutput?: Log) => {
+  try {
+    await buildOnce(repo, name, onOutput);
+  } catch (error) {
+    if (!relockPathInputs(repo)) throw error;
+    onOutput?.(`${repo.name}'s flake.lock was behind libs/vms - re-locked it, building again`);
+    await buildOnce(repo, name, onOutput);
+  }
+};
+
+const buildOnce = (repo: Repo, name: string, onOutput?: Log) =>
   new Promise<void>((resolve, reject) => {
     const args = [
       'build',

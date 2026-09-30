@@ -1,9 +1,10 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 import { VmError } from '../errors';
-import { flakeRef } from '../machine';
+import { flakeRef, nixError, relockPathInputs } from '../machine';
 import { machineSource, myRecipesDir, type Repo, stateDir } from '../repo';
 
 /**
@@ -52,8 +53,6 @@ export const familyOf = (catalog: Catalog, os: string) => catalog.os[os]?.family
 /** Every suggested tool, in group order. */
 export const allTools = (catalog: Catalog) => [...new Set(Object.values(catalog.tools).flat())];
 
-const catalogs = new Map<string, Catalog>();
-
 /**
  * The catalog as this code expects it, from whichever lib/catalog.nix the repo's flake has. The
  * app runs from the working tree but the catalog comes from the committed vms (a submodule is
@@ -71,21 +70,73 @@ export const normalizeCatalog = (raw: Partial<Record<keyof Catalog, unknown>>): 
   presets: (raw.presets ?? {}) as Catalog['presets'],
 });
 
-/** `nix eval <repo>#lib.info` - once per repo per process; the catalog only changes with the code. */
-export const loadCatalog = (repo: Repo): Catalog => {
-  const cached = catalogs.get(repo.root);
-  if (cached) return cached;
-  const result = spawnSync('nix', ['eval', '--json', `${flakeRef(repo)}#lib.info`], {
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  if (result.status !== 0) {
-    const said = result.stderr.trim().split('\n').filter(Boolean).slice(-3).join(' / ');
-    throw new VmError(`couldn't read ${repo.name}'s catalog: ${said || 'nix eval failed'}`);
+const catalogs = new Map<string, Catalog>();
+
+/** The last catalog read, on disk - so the wizard opens at once, before Nix answers. */
+const cacheFile = (repo: Repo) =>
+  join(process.env.XDG_CACHE_HOME || join(homedir(), '.cache'), 'vms', repo.name, 'catalog.json');
+
+/** The catalog known without asking Nix: this process's, or the last one on disk. */
+export const cachedCatalog = (repo: Repo): Catalog | undefined => {
+  const known = catalogs.get(repo.root);
+  if (known) return known;
+  try {
+    const catalog = normalizeCatalog(JSON.parse(readFileSync(cacheFile(repo), 'utf8')));
+    catalogs.set(repo.root, catalog);
+    return catalog;
+  } catch {
+    return undefined;
   }
-  const catalog = normalizeCatalog(JSON.parse(result.stdout));
+};
+
+const remember = (repo: Repo, stdout: string) => {
+  const catalog = normalizeCatalog(JSON.parse(stdout));
   catalogs.set(repo.root, catalog);
+  try {
+    mkdirSync(dirname(cacheFile(repo)), { recursive: true });
+    writeFileSync(cacheFile(repo), stdout);
+  } catch {
+    // Only a cache: the next read asks Nix again.
+  }
   return catalog;
+};
+
+const EVAL = (repo: Repo) => ['eval', '--json', `${flakeRef(repo)}#lib.info`];
+const failed = (repo: Repo, stderr: string) =>
+  new VmError(`couldn't read ${repo.name}'s catalog: ${nixError(stderr) || 'nix eval failed'}`);
+
+/** `nix eval <repo>#lib.info`, without blocking - for the dashboard, which reads it in the background. */
+export const fetchCatalog = async (repo: Repo): Promise<Catalog> => {
+  const once = () =>
+    new Promise<{ ok: boolean; stdout: string; stderr: string }>((resolve) => {
+      const child = spawn('nix', EVAL(repo), { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+      });
+      child.on('error', (error) => resolve({ ok: false, stdout, stderr: error.message }));
+      child.on('close', (code) => resolve({ ok: code === 0, stdout, stderr }));
+    });
+  let result = await once();
+  if (!result.ok && relockPathInputs(repo)) result = await once();
+  if (!result.ok) throw failed(repo, result.stderr);
+  return remember(repo, result.stdout);
+};
+
+/** The same, blocking - for the CLI (`vm new`, `vm catalog`). */
+export const loadCatalog = (repo: Repo): Catalog => {
+  const known = catalogs.get(repo.root);
+  if (known) return known;
+  const once = () =>
+    spawnSync('nix', EVAL(repo), { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  let result = once();
+  if (result.status !== 0 && relockPathInputs(repo)) result = once();
+  if (result.status !== 0) throw failed(repo, result.stderr);
+  return remember(repo, result.stdout);
 };
 
 /** The recipe behind a machine, when it has one (a hand-written machines/*.nix doesn't). */

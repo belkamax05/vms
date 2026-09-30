@@ -636,4 +636,50 @@ export const WizardView = ({
   );
 };
 
+/**
+ * The wizard before there's a catalog to build it from: reading it (the first time ever - after
+ * that the last one is on disk), or why that failed - here, where the wizard would be, with a
+ * way to try again.
+ */
+export const CatalogPending = ({
+  repo,
+  error,
+  onRetry,
+  onCancel,
+}: {
+  repo: Repo;
+  error?: string;
+  onRetry: () => void;
+  onCancel: () => void;
+}) => {
+  const colors = useColors();
+  useInput((input, key) => {
+    if (key.escape) onCancel();
+    else if (error && (input === 'r' || key.return)) onRetry();
+  });
+  return (
+    <Box flexDirection="column" flexGrow={1} overflow="hidden">
+      <Panel
+        title={error ? `Couldn't read ${repo.name}'s catalog` : 'New machine'}
+        color={error ? colors.error : undefined}
+        grow
+      >
+        <Text color={error ? colors.text : colors.muted} wrap="wrap">
+          {error ?? `Reading ${repo.name}'s catalog…`}
+        </Text>
+      </Panel>
+      <Box flexShrink={0}>
+        <Toolbar
+          actions={[
+            ...(error
+              ? [{ hotkey: 'r', label: 'Retry', onPress: onRetry, tone: 'primary' as const }]
+              : []),
+            { hotkey: 'Esc', label: 'Cancel', onPress: onCancel, tone: 'danger' },
+          ]}
+        />
+      </Box>
+    </Box>
+  );
+};
+
 export default WizardView;

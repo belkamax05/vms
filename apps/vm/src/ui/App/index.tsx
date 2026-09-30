@@ -12,12 +12,12 @@ import { nextThemeId } from '@/dev-tools/ui/theme';
 
 import type { VmConfig } from '../../config/settings';
 import { machineStatus } from '../../core/machine';
-import { type Catalog, loadCatalog } from '../../core/recipes';
+import { type Catalog, cachedCatalog, fetchCatalog } from '../../core/recipes';
 import { machineNames, type Repo } from '../../core/repo';
 import vmTheme from '../theme';
 import type { Handoff, Session, Tone } from '../types';
 import MachinesView from '../views/MachinesView';
-import WizardView from '../views/WizardView';
+import WizardView, { CatalogPending } from '../views/WizardView';
 
 type TabId = 'machines';
 
@@ -83,17 +83,28 @@ export const App = ({
     notice ? { text: notice, tone: 'info' } : undefined,
   );
   const [footerHint, setFooterHint] = useState<string | null>(null);
-  /** The New machine wizard, while it's open: the repo's catalog, and a machine to start from. */
-  const [wizard, setWizard] = useState<{ catalog: Catalog; from?: string } | undefined>();
+  /** The New machine wizard, while it's open, and the machine it starts from. */
+  const [wizard, setWizard] = useState<{ from?: string } | undefined>();
+  /**
+   * The repo's catalog: the last one known (this run's, or on disk) at once, then Nix's answer
+   * when it comes - read in the background from the start, so `n` never waits on it.
+   */
+  const [catalog, setCatalog] = useState<Catalog | undefined>(() => cachedCatalog(repo));
+  const [catalogError, setCatalogError] = useState<string | undefined>();
+  const readCatalog = useCallback(() => {
+    setCatalogError(undefined);
+    fetchCatalog(repo).then(setCatalog, (error: unknown) =>
+      setCatalogError(error instanceof Error ? error.message : String(error)),
+    );
+  }, [repo]);
+  useEffect(readCatalog, [readCatalog]);
   /** A machine the wizard just made with Create & up - MachinesView boots it once it's listed. */
   const [bootNext, setBootNext] = useState<string | undefined>();
 
   const openWizard = (from?: string) => {
-    try {
-      setWizard({ catalog: loadCatalog(repo), from });
-    } catch (error) {
-      setStatus({ text: error instanceof Error ? error.message : String(error), tone: 'error' });
-    }
+    setWizard({ from });
+    // Only when there's nothing to show yet: a failed read, or none at all.
+    if (!catalog) readCatalog();
   };
 
   const snapshot = useLoader(
@@ -178,10 +189,17 @@ export const App = ({
       footerActions={footerActions}
       onHoverFooterAction={(action) => setFooterHint(action?.tooltip ?? null)}
     >
-      {wizard ? (
+      {wizard && !catalog ? (
+        <CatalogPending
+          repo={repo}
+          error={catalogError}
+          onRetry={readCatalog}
+          onCancel={() => setWizard(undefined)}
+        />
+      ) : wizard && catalog ? (
         <WizardView
           repo={repo}
-          catalog={wizard.catalog}
+          catalog={catalog}
           from={wizard.from}
           onCancel={() => setWizard(undefined)}
           onCreated={(name, up) => {
