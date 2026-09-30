@@ -15,8 +15,10 @@ import useViewport from '@/dev-tools/ui/hooks/useViewport';
 import { useColors } from '@/dev-tools/ui/providers/TuiThemeProvider';
 
 import {
+  allTools,
   blankRecipe,
   type Catalog,
+  familyOf,
   nameProblem,
   type Recipe,
   readRecipe,
@@ -44,6 +46,7 @@ type StepId =
   | 'start'
   | 'os'
   | 'desktop'
+  | 'keyboard'
   | 'environment'
   | 'features'
   | 'tools'
@@ -54,6 +57,7 @@ const STEP_LABELS: Record<StepId, string> = {
   start: 'Start',
   os: 'OS',
   desktop: 'Desktop',
+  keyboard: 'Keyboard',
   environment: 'Environment',
   features: 'Features',
   tools: 'Tools',
@@ -65,6 +69,7 @@ const STEP_INTRO: Record<StepId, string> = {
   start: 'Start blank, or from an existing machine - every step after starts filled in from it.',
   os: 'The system the machine runs.',
   desktop: 'A desktop opens its own window; without one, the machine is a serial console.',
+  keyboard: 'What typing produces - the interface stays English.',
   environment:
     'Where the dev tools come from: pre-installed on the machine, or from each repo through direnv.',
   features: 'What else it gets. Required features switch on with what needs them.',
@@ -232,6 +237,7 @@ export const WizardView = ({
   // The step's rows, and what Enter (or a click) on each does.
   const recipes = machineSources(repo).filter((source) => source.kind !== 'module');
   const osLabel = catalog.os[recipe.os]?.label ?? recipe.os;
+  const family = familyOf(catalog, recipe.os);
   let items: PickItem<() => void>[] = [];
   switch (step) {
     case 'start':
@@ -276,22 +282,36 @@ export const WizardView = ({
         }),
       ];
       break;
-    case 'os':
-      items = Object.entries(catalog.os).map(([id, os]) => ({
-        id,
-        label: os.label,
-        isCurrent: recipe.os === id,
-        value: () => {
-          suggestName(id);
-          update((draft) => {
-            draft.os = id;
-            const desktop = draft.desktop ? catalog.desktops[draft.desktop] : undefined;
-            if (desktop && !desktop.os.includes(id)) draft.desktop = null;
-          });
-          next();
+    case 'os': {
+      // Grouped by family - Ubuntu's releases together, NixOS' channels together.
+      const families = new Map<string, [string, { label: string }][]>();
+      for (const entry of Object.entries(catalog.os)) {
+        const family = familyOf(catalog, entry[0]);
+        families.set(family, [...(families.get(family) ?? []), entry]);
+      }
+      items = [...families].flatMap(([family, entries]) => [
+        {
+          id: `h-${family}`,
+          label: family === 'nixos' ? 'NixOS' : family === 'ubuntu' ? 'Ubuntu' : family,
+          isHeader: true,
         },
-      }));
+        ...entries.map(([id, os]) => ({
+          id,
+          label: os.label,
+          isCurrent: recipe.os === id,
+          value: () => {
+            suggestName(id);
+            update((draft) => {
+              draft.os = id;
+              const desktop = draft.desktop ? catalog.desktops[draft.desktop] : undefined;
+              if (desktop && !desktop.os.includes(familyOf(catalog, id))) draft.desktop = null;
+            });
+            next();
+          },
+        })),
+      ]);
       break;
+    }
     case 'desktop':
       items = [
         {
@@ -309,8 +329,8 @@ export const WizardView = ({
         ...Object.entries(catalog.desktops).map(([id, desktop]) => ({
           id,
           label: desktop.label,
-          hint: desktop.os.includes(recipe.os) ? undefined : `not on ${osLabel}`,
-          disabled: !desktop.os.includes(recipe.os),
+          hint: desktop.os.includes(family) ? undefined : `not on ${osLabel}`,
+          disabled: !desktop.os.includes(family),
           isCurrent: recipe.desktop === id,
           value: () => {
             update((draft) => {
@@ -320,6 +340,23 @@ export const WizardView = ({
           },
         })),
       ];
+      break;
+    case 'keyboard':
+      // By name, the default first - not the catalog's key order.
+      items = Object.entries(catalog.keyboards)
+        .sort(([a, la], [b, lb]) => (a === 'us' ? -1 : b === 'us' ? 1 : la.localeCompare(lb)))
+        .map(([id, label]) => ({
+          id,
+          label,
+          hint: id,
+          isCurrent: (recipe.keyboard ?? 'us') === id,
+          value: () => {
+            update((draft) => {
+              draft.keyboard = id;
+            });
+            next();
+          },
+        }));
       break;
     case 'environment':
       items = (
@@ -332,7 +369,7 @@ export const WizardView = ({
           [
             'direnv',
             'Repo-provided (direnv)',
-            recipe.os === 'nixos'
+            family === 'nixos'
               ? 'direnv; each repo’s .envrc brings its tools'
               : 'Nix + direnv; each repo’s .envrc brings its tools',
           ],
@@ -388,25 +425,38 @@ export const WizardView = ({
       break;
     }
     case 'tools': {
-      const tools = [...new Set([...catalog.tools, ...(recipe.tools ?? [])])];
+      const suggested = allTools(catalog);
+      const added = (recipe.tools ?? []).filter((tool) => !suggested.includes(tool));
+      const groups: [string, string[]][] = [
+        ...Object.entries(catalog.tools),
+        ...(added.length ? [['Added', added] as [string, string[]]] : []),
+      ];
+      const toolRow = (group: string) => (tool: string) => {
+        const on = Boolean(recipe.tools?.includes(tool));
+        // A desktop app on a machine without one would never be seen.
+        const needsDesktop = group === 'Desktop apps' && !recipe.desktop;
+        return {
+          id: tool,
+          label: tool,
+          hint: needsDesktop ? 'needs a desktop' : undefined,
+          hintColor: colors.warn,
+          disabled: needsDesktop && !on,
+          controls: [
+            {
+              id: 'check',
+              glyph: check(on),
+              color: on ? colors.ok : colors.muted,
+              onPress: () => toggleTool(tool),
+            },
+          ],
+          value: () => toggleTool(tool),
+        };
+      };
       items = [
-        ...tools.map((tool) => {
-          const on = Boolean(recipe.tools?.includes(tool));
-          return {
-            id: tool,
-            label: tool,
-            hint: catalog.tools.includes(tool) ? undefined : 'added',
-            controls: [
-              {
-                id: 'check',
-                glyph: check(on),
-                color: on ? colors.ok : colors.muted,
-                onPress: () => toggleTool(tool),
-              },
-            ],
-            value: () => toggleTool(tool),
-          };
-        }),
+        ...groups.flatMap(([group, tools]) => [
+          { id: `h-${group}`, label: group, isHeader: true },
+          ...tools.map(toolRow(group)),
+        ]),
         {
           id: 'add',
           label: '+ Another nixpkgs package…',
@@ -521,6 +571,7 @@ export const WizardView = ({
     `${name} · ${osLabel} · ${recipe.desktop ? (catalog.desktops[recipe.desktop]?.label ?? recipe.desktop) : 'no desktop'}`,
     `features: ${[...resolved.on].map((id) => catalog.features[id]?.label ?? id).join(', ') || 'none'}`,
     `tools: ${recipe.tools?.join(', ') || 'none'}`,
+    `keyboard: ${catalog.keyboards[recipe.keyboard ?? 'us'] ?? recipe.keyboard}`,
     `size: ${recipe.cpus ?? 'default'} CPUs · ${recipe.memory ?? 'default'} MiB · ${recipe.diskSize ?? 'default'} MiB disk`,
   ];
   const listRows = Math.max(4, viewport.rows - 22);

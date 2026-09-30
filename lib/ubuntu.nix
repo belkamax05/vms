@@ -23,10 +23,20 @@ let
   aptPool = "http://archive.ubuntu.com/ubuntu";
   aptSnapshot = "https://snapshot.ubuntu.com/ubuntu/${lock.snapshot}";
 
-  image = pkgs.fetchurl {
-    url = "https://cloud-images.ubuntu.com/releases/26.04/release-20260918/ubuntu-26.04-server-cloudimg-amd64.img";
-    sha256 = "4908fb59ccd4e87ae4e8e973b7ef56f535448eacb24a87fd787270c0048987bc";
+  # One pinned image per `ubuntu.release`. A machine's lockfile is resolved
+  # against its release's image, so moving a machine to another release
+  # means `vm lock` again (its first `up` does it).
+  images = {
+    "26.04" = {
+      url = "https://cloud-images.ubuntu.com/releases/26.04/release-20260918/ubuntu-26.04-server-cloudimg-amd64.img";
+      sha256 = "4908fb59ccd4e87ae4e8e973b7ef56f535448eacb24a87fd787270c0048987bc";
+    };
+    "24.04" = {
+      url = "https://cloud-images.ubuntu.com/releases/noble/release-20260926/ubuntu-24.04-server-cloudimg-amd64.img";
+      sha256 = "6a81c37564db9b1ee84e141922625e1d7c5b389b99bb3c572e0243607d5bb4d2";
+    };
   };
+  image = pkgs.fetchurl images.${cfg.ubuntu.release};
 
   packages = lib.unique cfg.ubuntu.packages;
 

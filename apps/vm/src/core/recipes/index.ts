@@ -15,6 +15,8 @@ export interface Recipe {
   desktop?: string | null;
   features?: string[];
   tools?: string[];
+  /** XKB layout (catalog `keyboards`): what typing produces. Left out: English (US). */
+  keyboard?: string;
   cpus?: number;
   memory?: number;
   diskSize?: number;
@@ -33,14 +35,41 @@ export interface CatalogFeature {
 
 /** The repo's catalog as data (`lib.info`, lib/catalog.nix): what a recipe can be made of. */
 export interface Catalog {
-  os: Record<string, { label: string }>;
+  /** `family` (ubuntu, nixos) is what features' `os`/`requiresOn` and desktops' `os` name. */
+  os: Record<string, { label: string; family?: string }>;
   desktops: Record<string, { label: string; os: string[] }>;
   features: Record<string, CatalogFeature>;
-  tools: string[];
+  /** Suggested nixpkgs names, by group. */
+  tools: Record<string, string[]>;
+  /** XKB layout -> its name. */
+  keyboards: Record<string, string>;
   presets: Record<string, Recipe>;
 }
 
+/** Ubuntu for every Ubuntu release: what features and desktops say they run on. */
+export const familyOf = (catalog: Catalog, os: string) => catalog.os[os]?.family ?? os;
+
+/** Every suggested tool, in group order. */
+export const allTools = (catalog: Catalog) => [...new Set(Object.values(catalog.tools).flat())];
+
 const catalogs = new Map<string, Catalog>();
+
+/**
+ * The catalog as this code expects it, from whichever lib/catalog.nix the repo's flake has. The
+ * app runs from the working tree but the catalog comes from the committed vms (a submodule is
+ * built from its commit), so an older catalog - tools as one flat list, no keyboards - must still
+ * work: what it lacks gets the defaults it would have had.
+ */
+export const normalizeCatalog = (raw: Partial<Record<keyof Catalog, unknown>>): Catalog => ({
+  os: (raw.os ?? {}) as Catalog['os'],
+  desktops: (raw.desktops ?? {}) as Catalog['desktops'],
+  features: (raw.features ?? {}) as Catalog['features'],
+  tools: Array.isArray(raw.tools)
+    ? { Tools: raw.tools as string[] }
+    : ((raw.tools ?? {}) as Catalog['tools']),
+  keyboards: (raw.keyboards ?? { us: 'English (US)' }) as Catalog['keyboards'],
+  presets: (raw.presets ?? {}) as Catalog['presets'],
+});
 
 /** `nix eval <repo>#lib.info` - once per repo per process; the catalog only changes with the code. */
 export const loadCatalog = (repo: Repo): Catalog => {
@@ -54,7 +83,7 @@ export const loadCatalog = (repo: Repo): Catalog => {
     const said = result.stderr.trim().split('\n').filter(Boolean).slice(-3).join(' / ');
     throw new VmError(`couldn't read ${repo.name}'s catalog: ${said || 'nix eval failed'}`);
   }
-  const catalog = JSON.parse(result.stdout) as Catalog;
+  const catalog = normalizeCatalog(JSON.parse(result.stdout));
   catalogs.set(repo.root, catalog);
   return catalog;
 };
@@ -78,7 +107,8 @@ export const resolveFeatures = (catalog: Catalog, recipe: Recipe) => {
     const id = queue.shift() as string;
     const feature = catalog.features[id];
     if (!feature) continue;
-    for (const need of [...(feature.requires ?? []), ...(feature.requiresOn?.[recipe.os] ?? [])]) {
+    const family = familyOf(catalog, recipe.os);
+    for (const need of [...(feature.requires ?? []), ...(feature.requiresOn?.[family] ?? [])]) {
       if (on.has(need)) continue;
       on.add(need);
       requiredBy.set(need, id);
@@ -92,7 +122,7 @@ export const resolveFeatures = (catalog: Catalog, recipe: Recipe) => {
 export const unavailable = (catalog: Catalog, recipe: Recipe, id: string): string | undefined => {
   const feature = catalog.features[id];
   if (!feature) return 'not in the catalog';
-  if (feature.os && !feature.os.includes(recipe.os))
+  if (feature.os && !feature.os.includes(familyOf(catalog, recipe.os)))
     return `not on ${catalog.os[recipe.os]?.label ?? recipe.os}`;
   if (feature.desktop && !recipe.desktop) return 'needs a desktop';
   return undefined;
@@ -104,7 +134,9 @@ export const recipeProblems = (catalog: Catalog, recipe: Recipe): string[] => {
   if (!catalog.os[recipe.os]) problems.push(`unknown OS '${recipe.os}'`);
   const desktop = recipe.desktop ? catalog.desktops[recipe.desktop] : undefined;
   if (recipe.desktop && !desktop) problems.push(`unknown desktop '${recipe.desktop}'`);
-  else if (desktop && !desktop.os.includes(recipe.os))
+  if (recipe.keyboard && !catalog.keyboards[recipe.keyboard])
+    problems.push(`unknown keyboard layout '${recipe.keyboard}'`);
+  else if (desktop && !desktop.os.includes(familyOf(catalog, recipe.os)))
     problems.push(`${desktop.label} doesn't run on ${recipe.os}`);
   for (const id of resolveFeatures(catalog, recipe).on) {
     const why = unavailable(catalog, recipe, id);
@@ -115,8 +147,10 @@ export const recipeProblems = (catalog: Catalog, recipe: Recipe): string[] => {
 
 /** A blank recipe: the catalog's default features, the first OS and desktop. */
 export const blankRecipe = (catalog: Catalog): Recipe => {
-  const os = Object.keys(catalog.os)[0] ?? 'ubuntu';
-  const desktop = Object.entries(catalog.desktops).find(([, d]) => d.os.includes(os))?.[0] ?? null;
+  const os = catalog.os.ubuntu ? 'ubuntu' : (Object.keys(catalog.os)[0] ?? 'ubuntu');
+  const desktop =
+    Object.entries(catalog.desktops).find(([, d]) => d.os.includes(familyOf(catalog, os)))?.[0] ??
+    null;
   const recipe: Recipe = { os, desktop, features: [], tools: [] };
   recipe.features = Object.entries(catalog.features)
     .filter(([id, feature]) => feature.default && !unavailable(catalog, recipe, id))
@@ -138,6 +172,7 @@ const formatRecipe = (recipe: Recipe) => {
   const tidy: Recipe = { os: recipe.os, desktop: recipe.desktop ?? null };
   if (recipe.features?.length) tidy.features = [...recipe.features];
   if (recipe.tools?.length) tidy.tools = [...recipe.tools];
+  if (recipe.keyboard && recipe.keyboard !== 'us') tidy.keyboard = recipe.keyboard;
   for (const key of ['cpus', 'memory', 'diskSize'] as const) {
     if (recipe[key] !== undefined) tidy[key] = recipe[key];
   }

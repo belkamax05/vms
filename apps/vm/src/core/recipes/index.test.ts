@@ -8,6 +8,7 @@ import {
   blankRecipe,
   type Catalog,
   forgetRecipe,
+  normalizeCatalog,
   nameProblem,
   recipeProblems,
   resolveFeatures,
@@ -17,8 +18,15 @@ import {
 
 /** vms' catalog with a vms-dfs-like extension - the shape `lib.info` evaluates to. */
 const catalog: Catalog = {
-  os: { nixos: { label: 'NixOS 26.05' }, ubuntu: { label: 'Ubuntu 26.04' } },
-  desktops: { gnome: { label: 'GNOME', os: ['ubuntu', 'nixos'] } },
+  os: {
+    nixos: { label: 'NixOS 26.05', family: 'nixos' },
+    ubuntu: { label: 'Ubuntu 26.04', family: 'ubuntu' },
+    'ubuntu-lts': { label: 'Ubuntu 24.04 LTS', family: 'ubuntu' },
+  },
+  desktops: {
+    gnome: { label: 'GNOME', os: ['ubuntu', 'nixos'] },
+    cosmic: { label: 'COSMIC', os: ['nixos'] },
+  },
   features: {
     git: { label: 'git', group: 'Shell', default: true },
     zsh: { label: 'zsh', group: 'Shell', default: true },
@@ -33,7 +41,8 @@ const catalog: Catalog = {
     'dfs-repos': { label: 'DFS repos', group: 'DFS', desktop: true, default: true },
     'dfs-direnv': { label: 'Trust ~/dfs', group: 'DFS', requires: ['direnv', 'dfs-repos'] },
   },
-  tools: ['bun', 'lazygit'],
+  tools: { 'Languages & build': ['bun'], 'Editors & git': ['lazygit'] },
+  keyboards: { us: 'English (US)', pt: 'Portuguese' },
   presets: {},
 };
 
@@ -61,6 +70,9 @@ test('features pull in what they require, per OS, the way lib/recipe.nix does', 
   expect(ubuntu.requiredBy.get('nix')).toBe('direnv');
   const nixos = resolveFeatures(catalog, { os: 'nixos', features: ['direnv'] });
   expect([...nixos.on].sort()).toEqual(['direnv', 'zsh']);
+  // Every Ubuntu release is the ubuntu family: 24.04 needs Nix for direnv too.
+  const lts = resolveFeatures(catalog, { os: 'ubuntu-lts', features: ['direnv'] });
+  expect([...lts.on].sort()).toEqual(['direnv', 'nix', 'zsh']);
 });
 
 test('a combination that cannot build says why', () => {
@@ -71,6 +83,13 @@ test('a combination that cannot build says why', () => {
     recipeProblems(catalog, { os: 'ubuntu', desktop: null, features: ['dfs-direnv'] }),
   ).toEqual(['DFS repos: needs a desktop']);
   expect(recipeProblems(catalog, { os: 'arch' })).toEqual(["unknown OS 'arch'"]);
+  expect(recipeProblems(catalog, { os: 'ubuntu-lts', desktop: 'cosmic' })).toEqual([
+    "COSMIC doesn't run on ubuntu-lts",
+  ]);
+  expect(recipeProblems(catalog, { os: 'nixos', desktop: 'cosmic' })).toEqual([]);
+  expect(recipeProblems(catalog, { os: 'nixos', keyboard: 'xx' })).toEqual([
+    "unknown keyboard layout 'xx'",
+  ]);
   expect(recipeProblems(catalog, { os: 'ubuntu', desktop: 'gnome', features: ['git'] })).toEqual(
     [],
   );
@@ -78,7 +97,7 @@ test('a combination that cannot build says why', () => {
 
 test('a blank recipe has the default features that fit it', () => {
   expect(blankRecipe(catalog)).toEqual({
-    os: 'nixos',
+    os: 'ubuntu',
     desktop: 'gnome',
     features: ['git', 'zsh', 'dfs-repos'],
     tools: [],
@@ -106,4 +125,17 @@ test('a new machine is a recipe outside the repo, listed with the rest, and forg
   forgetRecipe(repo, 'mine-1');
   expect(existsSync(path)).toBe(false);
   expect(machineNames(repo)).toEqual([]);
+});
+
+test('an older catalog - flat tools, no keyboards - still reads', () => {
+  const old = normalizeCatalog({
+    os: { ubuntu: { label: 'Ubuntu 26.04' } },
+    desktops: {},
+    features: {},
+    tools: ['bun', 'fd'],
+    presets: {},
+  });
+  expect(old.tools).toEqual({ Tools: ['bun', 'fd'] });
+  expect(old.keyboards).toEqual({ us: 'English (US)' });
+  expect(recipeProblems(old, { os: 'ubuntu' })).toEqual([]);
 });

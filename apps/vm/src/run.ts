@@ -48,7 +48,7 @@ usage:
   vm key <name> --import <file>
                          make a backed-up private key its vm-ssh
   vm new <name> [--from <machine>] [--os <os>] [--desktop <desktop>|none]
-         [--features a,b] [--without a,b] [--tools a,b]
+         [--features a,b] [--without a,b] [--tools a,b] [--keyboard pt]
          [--cpus N] [--memory MiB] [--disk MiB]
                          a new machine from the catalog (vm catalog) - a recipe
                          in ~/.config/vms/<repo>/recipes, no git add needed;
@@ -186,6 +186,8 @@ export const run = async (...argv: string[]) => {
         } else recipe = blankRecipe(catalog);
         const os = option('--os');
         if (os) recipe.os = os;
+        const keyboard = option('--keyboard');
+        if (keyboard) recipe.keyboard = keyboard;
         const desktop = option('--desktop');
         if (desktop) recipe.desktop = desktop === 'none' ? null : desktop;
         const without = new Set(list('--without'));
@@ -233,7 +235,10 @@ export const run = async (...argv: string[]) => {
               .join('; '),
           );
         }
-        console.log(`tools (any nixpkgs name works): ${catalog.tools.join(' ')}`);
+        console.log('keyboards (typing only - the interface stays English):');
+        for (const [id, label] of Object.entries(catalog.keyboards)) line(id, label);
+        console.log('tools (any nixpkgs name works):');
+        for (const [group, tools] of Object.entries(catalog.tools)) line(group, tools.join(' '));
         return;
       }
       case 'down':

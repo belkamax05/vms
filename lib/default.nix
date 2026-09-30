@@ -9,7 +9,7 @@
 #                ~/.ssh/id_ed25519 on every boot)
 #   meta         shell-sourceable facts about it (os, user, gui, and the
 #                apt packages `vm lock` resolves - none on NixOS)
-{ nixpkgs, nixGL }:
+{ nixpkgs, nixpkgs-unstable, nixGL }:
 
 let
   inherit (nixpkgs) lib;
@@ -99,7 +99,11 @@ rec {
 
       builder = { ubuntu = ./ubuntu.nix; nixos = ./nixos.nix; }.${cfg.os};
     in
-    import builder { inherit pkgs lib cfg mkRunner nixpkgs lockFile hostRequests; };
+    import builder {
+      inherit pkgs lib cfg mkRunner lockFile hostRequests;
+      # The NixOS builder's system comes from the machine's channel.
+      nixpkgs = if cfg.nixos.channel == "unstable" then nixpkgs-unstable else nixpkgs;
+    };
 
   # A directory of machines/<name>.nix -> { <name> = package; }, no registry
   # to edit. This repo's own flake and any repo extending it call this on

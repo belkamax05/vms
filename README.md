@@ -86,13 +86,28 @@ OS-specific half for each OS it supports:
   need Nix for that.
 - `nixos.modules` holds ordinary NixOS modules.
 
+Every desktop plugin sits on `plugins/desktop.nix` (a window, 8 GiB, no snap
+stubs, the graphical target) and adds only its packages, autologin and
+lock-screen-off settings - no lock screen anywhere, since the user has no
+password.
+
+Two options pick a release: `ubuntu.release` ("26.04", or "24.04" LTS - each a
+pinned cloud image in `lib/ubuntu.nix`) and `nixos.channel` ("stable", or
+"unstable" - `nixpkgs-unstable`, pinned in `flake.lock`). The catalog offers
+them as OSes of their own (`ubuntu-lts`, `nixos-unstable`).
+
 The builder for the machine's own OS reads only its half. That lets one plugin
 file (see `plugins/gui.nix`) serve both OSes, and a machine can import any mix of
 plugins, since list options from all of them concatenate.
 
 | plugin | Ubuntu | NixOS |
 | --- | --- | --- |
-| `gui` | `ubuntu-desktop-minimal` (GNOME), autologin | GNOME + GDM, autologin |
+| `gui` | GNOME: `ubuntu-desktop-minimal`, autologin | GNOME + GDM, autologin |
+| `kde` | KDE Plasma: `kde-plasma-desktop` + SDDM, autologin | Plasma 6 + SDDM, autologin |
+| `xfce` | XFCE: `xfce4` + LightDM, autologin | XFCE + LightDM, autologin |
+| `cinnamon` | Cinnamon: `cinnamon` + LightDM, autologin | Cinnamon + LightDM, autologin |
+| `cosmic` | - (not packaged) | COSMIC + cosmic-greeter, autologin |
+| `starship` | Starship from nixpkgs, zsh hook | `programs.starship` |
 | `nix` | official multi-user installer, pinned, flakes on | flakes on (NixOS already has Nix) |
 | `git` | nixpkgs' `git` (`ubuntu.nixPackages`) | `programs.git` |
 | `zsh` | nixpkgs' `zsh`, the login shell | `programs.zsh`, the login shell |

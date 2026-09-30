@@ -82,6 +82,11 @@ in
     };
 
     ubuntu = {
+      release = mkOption {
+        type = types.enum [ "26.04" "24.04" ];
+        default = "26.04";
+        description = "Which Ubuntu - each has its own pinned cloud image (lib/ubuntu.nix).";
+      };
       packages = mkOption {
         type = types.listOf types.str;
         default = [ ];
@@ -113,6 +118,16 @@ in
         default = { };
         description = "Any other top-level cloud-config keys, merged over the generated ones.";
       };
+    };
+
+    nixos.channel = mkOption {
+      type = types.enum [ "stable" "unstable" ];
+      default = "stable";
+      description = ''
+        Which nixpkgs the NixOS system is built from: this repo's pinned
+        release (stable) or its pinned nixos-unstable. Tools (`packages`)
+        come from the release either way.
+      '';
     };
 
     nixos.modules = mkOption {

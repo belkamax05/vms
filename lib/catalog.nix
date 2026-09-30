@@ -3,8 +3,10 @@
 # A repo that extends this one adds its own entries (vms-dfs' catalog.nix):
 # `extend` merges them in, theirs winning on a clash.
 #
-#   os.<id>        the base machine a recipe starts from
-#   desktops.<id>  a desktop, with the OSes it runs on
+#   os.<id>        the base machine a recipe starts from; `family` (ubuntu,
+#                  nixos) is what features' `os` and `requiresOn` name, so a
+#                  feature needn't list every release
+#   desktops.<id>  a desktop, with the OS families it runs on
 #   features.<id>  a plugin (or any module) to toggle:
 #                    group     the heading the wizard files it under
 #                    requires  features switched on with it, on every OS
@@ -12,8 +14,10 @@
 #                    os        the OSes it runs on (all when unset)
 #                    desktop   true: needs a desktop (a login to start from)
 #                    default   true: on in a blank recipe
-#   tools          nixpkgs attribute names the wizard suggests; any other
-#                  name works too
+#   tools.<group>  nixpkgs attribute names the wizard suggests, grouped; any
+#                  other name works too
+#   keyboards.<id> keyboard layouts (XKB names) - what typing produces; the
+#                  interface stays English
 #   presets.<id>   recipes to start from
 #
 # Everything but `module`/`base` is plain data: `info` is what `vm` reads.
@@ -22,12 +26,26 @@
 let
   catalog = {
     os = {
-      ubuntu = { label = "Ubuntu 26.04"; base = ../machines/ubuntu.nix; };
-      nixos = { label = "NixOS 26.05"; base = ../machines/nixos.nix; };
+      ubuntu = { label = "Ubuntu 26.04"; family = "ubuntu"; base = ../machines/ubuntu.nix; };
+      ubuntu-lts = {
+        label = "Ubuntu 24.04 LTS";
+        family = "ubuntu";
+        base = { imports = [ ../machines/ubuntu.nix ]; ubuntu.release = "24.04"; };
+      };
+      nixos = { label = "NixOS 26.05"; family = "nixos"; base = ../machines/nixos.nix; };
+      nixos-unstable = {
+        label = "NixOS unstable";
+        family = "nixos";
+        base = { imports = [ ../machines/nixos.nix ]; nixos.channel = "unstable"; };
+      };
     };
 
     desktops = {
       gnome = { label = "GNOME"; module = ../plugins/gui.nix; os = [ "ubuntu" "nixos" ]; };
+      kde = { label = "KDE Plasma"; module = ../plugins/kde.nix; os = [ "ubuntu" "nixos" ]; };
+      xfce = { label = "XFCE"; module = ../plugins/xfce.nix; os = [ "ubuntu" "nixos" ]; };
+      cinnamon = { label = "Cinnamon"; module = ../plugins/cinnamon.nix; os = [ "ubuntu" "nixos" ]; };
+      cosmic = { label = "COSMIC"; module = ../plugins/cosmic.nix; os = [ "nixos" ]; };
     };
 
     features = {
@@ -44,6 +62,13 @@ let
         group = "Shell";
         module = ../plugins/zsh.nix;
         default = true;
+      };
+      starship = {
+        label = "Starship";
+        description = "the prompt, hooked into zsh";
+        group = "Shell";
+        module = ../plugins/starship.nix;
+        requires = [ "zsh" ];
       };
       zoxide = {
         label = "zoxide";
@@ -68,7 +93,30 @@ let
       };
     };
 
-    tools = [ "bun" "lazygit" "nodejs" "ripgrep" "fd" "jq" "fzf" "htop" "neovim" "gh" ];
+    # General dev tools - nothing tied to one person or company.
+    tools = {
+      "Editors & git" = [ "neovim" "lazygit" "delta" "gh" "meld" ];
+      "Search & files" = [ "ripgrep" "fd" "fzf" "bat" "lsd" "yazi" "ncdu" "ast-grep" "jq" ];
+      "Languages & build" = [ "bun" "nodejs" "python3" "uv" "go" "rustup" "cmake" "ninja" "just" "mise" "biome" ];
+      "Terminal" = [ "zellij" "tmux" "gum" "glow" "hyperfine" "shellcheck" "pandoc" ];
+      "System" = [ "htop" "btop" "fastfetch" ];
+      "AI" = [ "codex" ];
+      "Desktop apps" = [ "firefox" ];
+    };
+
+    # English first: a recipe without `keyboard` gets it.
+    keyboards = {
+      us = "English (US)";
+      pt = "Portuguese";
+      br = "Portuguese (Brazil)";
+      gb = "English (UK)";
+      es = "Spanish";
+      de = "German";
+      fr = "French";
+      it = "Italian";
+      pl = "Polish";
+      ua = "Ukrainian";
+    };
 
     presets = { };
   };
@@ -84,7 +132,8 @@ in
     os = catalog.os // (extra.os or { });
     desktops = catalog.desktops // (extra.desktops or { });
     features = catalog.features // (extra.features or { });
-    tools = lib.unique (catalog.tools ++ (extra.tools or [ ]));
+    tools = lib.zipAttrsWith (_: lists: lib.unique (lib.concatLists lists)) [ catalog.tools (extra.tools or { }) ];
+    keyboards = catalog.keyboards // (extra.keyboards or { });
     presets = catalog.presets // (extra.presets or { });
   };
 
@@ -92,6 +141,6 @@ in
     os = strip c.os;
     desktops = strip c.desktops;
     features = strip c.features;
-    inherit (c) tools presets;
+    inherit (c) tools keyboards presets;
   };
 }

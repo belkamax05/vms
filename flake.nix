@@ -5,16 +5,19 @@
     # Same release as ~/dotfiles' pins, so the NixOS guests and the host's
     # own profile share one binary cache's worth of store paths.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    # For NixOS machines with `nixos.channel = "unstable"` only - pinned in
+    # flake.lock like everything else, and fetched only when one is built.
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
     nixGL = {
       url = "github:nix-community/nixGL";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, nixGL }:
+  outputs = { self, nixpkgs, nixpkgs-unstable, nixGL }:
     let
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      vmsLib = import ./lib { inherit nixpkgs nixGL; };
+      vmsLib = import ./lib { inherit nixpkgs nixpkgs-unstable nixGL; };
       machines = vmsLib.mkMachines ./machines // vmsLib.mkRecipes vmsLib.catalog ./recipes;
     in
     {

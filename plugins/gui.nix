@@ -1,12 +1,14 @@
-# A desktop, logged straight in. GNOME on both OSes so the two are
-# comparable - it's what stock Ubuntu Desktop is, and NixOS's module for it
-# is the best-trodden one. On Ubuntu this is a first-boot apt install
-# (~1.5 GB, several minutes); on NixOS it comes from the binary cache.
+# GNOME, logged straight in - the same desktop on both OSes, so the two are
+# comparable: it's what stock Ubuntu Desktop is, and NixOS's module for it is
+# the best-trodden one. On Ubuntu this is a first-boot apt install (~1.5 GB,
+# several minutes); on NixOS it comes from the binary cache. The other
+# desktops sit beside it (kde.nix, xfce.nix, ...), on desktop.nix.
 { config, lib, ... }:
 
 let
   # The same three GNOME settings for both OSes: lock screen off, idle
-  # blanking (which locks) off.
+  # blanking (which locks) off - the user has no password (see
+  # lib/options.nix), so a locked session could never be unlocked.
   noLock = {
     settings = {
       "org/gnome/desktop/screensaver".lock-enabled = false;
@@ -26,28 +28,12 @@ let
   };
 in
 {
-  gui = true;
-  memory = 8192;
+  imports = [ ./desktop.nix ];
 
   ubuntu = {
     packages = [ "ubuntu-desktop-minimal" "dconf-cli" ];
     writeFiles = [
-      # Ubuntu's `firefox` deb is only a stub that runs `snap install
-      # firefox`, and snaps come from the live Snap Store - no revision to
-      # pin, unlike apt (lib/ubuntu.nix's snapshot). The desktop only
-      # recommends it, so forbidding it keeps the install reproducible and
-      # the desktop whole. Written before `packages` runs.
-      {
-        path = "/etc/apt/preferences.d/vms-no-snap-stubs";
-        content = ''
-          Package: firefox
-          Pin: version *
-          Pin-Priority: -1
-        '';
-      }
-      # No lock screen, no idle blanking: the user has no password (see
-      # lib/options.nix), so a locked session could never be unlocked.
-      # System defaults, applied by `dconf update` in runcmd below.
+      # System defaults, applied by desktop.nix's `dconf update`.
       {
         path = "/etc/dconf/profile/user";
         defer = true;
@@ -59,9 +45,7 @@ in
       {
         path = "/etc/dconf/db/local.d/00-vms-no-lock";
         defer = true;
-        content = ''
-          ${noLock.keyfile}
-        '';
+        content = noLock.keyfile;
       }
       # defer: written in cloud-init's final stage, once the user exists.
       # That's before the install (lib/ubuntu.nix runs it from runcmd), and
@@ -76,14 +60,6 @@ in
           AutomaticLogin=${config.user}
         '';
       }
-    ];
-    # The cloud image boots to multi-user.target; the desktop only arrives
-    # after first boot's install, so switch target and start it in place
-    # instead of needing a reboot.
-    runcmd = [
-      [ "dconf" "update" ]
-      [ "systemctl" "set-default" "graphical.target" ]
-      [ "systemctl" "start" "--no-block" "display-manager.service" ]
     ];
   };
 
