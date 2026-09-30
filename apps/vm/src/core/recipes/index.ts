@@ -32,6 +32,8 @@ export interface CatalogFeature {
   requiresOn?: Record<string, string[]>;
   desktop?: boolean;
   default?: boolean;
+  /** OS families it's part of - always on there, not a choice (Nix on NixOS). */
+  builtinOn?: string[];
 }
 
 /** The repo's catalog as data (`lib.info`, lib/catalog.nix): what a recipe can be made of. */
@@ -44,6 +46,8 @@ export interface Catalog {
   tools: Record<string, string[]>;
   /** XKB layout -> its name. */
   keyboards: Record<string, string>;
+  /** Tools ticked in a blank recipe. */
+  defaultTools: string[];
   presets: Record<string, Recipe>;
 }
 
@@ -67,6 +71,7 @@ export const normalizeCatalog = (raw: Partial<Record<keyof Catalog, unknown>>): 
     ? { Tools: raw.tools as string[] }
     : ((raw.tools ?? {}) as Catalog['tools']),
   keyboards: (raw.keyboards ?? { us: 'English (US)' }) as Catalog['keyboards'],
+  defaultTools: (raw.defaultTools ?? []) as string[],
   presets: (raw.presets ?? {}) as Catalog['presets'],
 });
 
@@ -150,8 +155,13 @@ export const readRecipe = (repo: Repo, name: string): Recipe | undefined => {
  * The features a recipe really gets: its own, plus everything they require on its OS - the same
  * closure lib/recipe.nix takes. `requiredBy` says which feature pulled each extra one in.
  */
+/** Part of the recipe's OS itself (Nix on NixOS): on, and not the recipe's to turn off. */
+export const isBuiltin = (catalog: Catalog, recipe: Recipe, id: string) =>
+  Boolean(catalog.features[id]?.builtinOn?.includes(familyOf(catalog, recipe.os)));
+
 export const resolveFeatures = (catalog: Catalog, recipe: Recipe) => {
-  const on = new Set(recipe.features ?? []);
+  const builtin = Object.keys(catalog.features).filter((id) => isBuiltin(catalog, recipe, id));
+  const on = new Set([...(recipe.features ?? []), ...builtin]);
   const requiredBy = new Map<string, string>();
   const queue = [...on];
   while (queue.length) {
@@ -202,7 +212,7 @@ export const blankRecipe = (catalog: Catalog): Recipe => {
   const desktop =
     Object.entries(catalog.desktops).find(([, d]) => d.os.includes(familyOf(catalog, os)))?.[0] ??
     null;
-  const recipe: Recipe = { os, desktop, features: [], tools: [] };
+  const recipe: Recipe = { os, desktop, features: [], tools: [...catalog.defaultTools] };
   recipe.features = Object.entries(catalog.features)
     .filter(([id, feature]) => feature.default && !unavailable(catalog, recipe, id))
     .map(([id]) => id);

@@ -8,6 +8,7 @@ import {
   blankRecipe,
   type Catalog,
   forgetRecipe,
+  isBuiltin,
   normalizeCatalog,
   nameProblem,
   recipeProblems,
@@ -31,18 +32,20 @@ const catalog: Catalog = {
     git: { label: 'git', group: 'Shell', default: true },
     zsh: { label: 'zsh', group: 'Shell', default: true },
     zoxide: { label: 'zoxide', group: 'Shell', requires: ['zsh'] },
-    nix: { label: 'Nix', group: 'Environment' },
+    nix: { label: 'Nix', group: 'Environment', default: true, builtinOn: ['nixos'] },
     direnv: {
       label: 'direnv',
       group: 'Environment',
       requires: ['zsh'],
       requiresOn: { ubuntu: ['nix'] },
+      default: true,
     },
     'dfs-repos': { label: 'DFS repos', group: 'DFS', desktop: true, default: true },
     'dfs-direnv': { label: 'Trust ~/dfs', group: 'DFS', requires: ['direnv', 'dfs-repos'] },
   },
   tools: { 'Languages & build': ['bun'], 'Editors & git': ['lazygit'] },
   keyboards: { us: 'English (US)', pt: 'Portuguese' },
+  defaultTools: ['bun'],
   presets: {},
 };
 
@@ -68,8 +71,11 @@ test('features pull in what they require, per OS, the way lib/recipe.nix does', 
   const ubuntu = resolveFeatures(catalog, { os: 'ubuntu', features: ['dfs-direnv'] });
   expect([...ubuntu.on].sort()).toEqual(['dfs-direnv', 'dfs-repos', 'direnv', 'nix', 'zsh']);
   expect(ubuntu.requiredBy.get('nix')).toBe('direnv');
+  // Nix is part of NixOS: on there whatever the recipe says.
   const nixos = resolveFeatures(catalog, { os: 'nixos', features: ['direnv'] });
-  expect([...nixos.on].sort()).toEqual(['direnv', 'zsh']);
+  expect([...nixos.on].sort()).toEqual(['direnv', 'nix', 'zsh']);
+  expect(isBuiltin(catalog, { os: 'nixos' }, 'nix')).toBe(true);
+  expect(isBuiltin(catalog, { os: 'ubuntu' }, 'nix')).toBe(false);
   // Every Ubuntu release is the ubuntu family: 24.04 needs Nix for direnv too.
   const lts = resolveFeatures(catalog, { os: 'ubuntu-lts', features: ['direnv'] });
   expect([...lts.on].sort()).toEqual(['direnv', 'nix', 'zsh']);
@@ -99,8 +105,8 @@ test('a blank recipe has the default features that fit it', () => {
   expect(blankRecipe(catalog)).toEqual({
     os: 'ubuntu',
     desktop: 'gnome',
-    features: ['git', 'zsh', 'dfs-repos'],
-    tools: [],
+    features: ['git', 'zsh', 'nix', 'direnv', 'dfs-repos'],
+    tools: ['bun'],
   });
 });
 

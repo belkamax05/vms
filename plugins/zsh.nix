@@ -18,6 +18,21 @@ let
     defer = true;
   };
   zsh = "/usr/local/bin/zsh";
+
+  # `z` wherever zoxide turns up: installed (the zoxide plugin), or brought
+  # by a repo's .envrc through direnv - which carries PATH back to the shell
+  # but never functions, and `z` is one `zoxide init` defines. Checked before
+  # every prompt, so it's there as soon as direnv has loaded; after direnv's
+  # own hook, which runs first (its file sorts before this one).
+  zoxideHook = ''
+    _vms_zoxide_init() {
+      if (( $+commands[zoxide] )) && (( ! $+functions[__zoxide_z] )); then
+        eval "$(zoxide init zsh)"
+      fi
+    }
+    precmd_functions+=(_vms_zoxide_init)
+    _vms_zoxide_init
+  '';
 in
 {
   ubuntu = {
@@ -39,6 +54,10 @@ in
         # Other plugins' shell setup (the direnv plugin's hook, say).
         for f in /etc/zshrc.d/*.zsh(N); do source "$f"; done
       '')
+      {
+        path = "/etc/zshrc.d/zoxide.zsh";
+        content = zoxideHook;
+      }
     ];
     runcmd = [
       # Only once zsh is really there: a login shell that doesn't exist locks
@@ -48,8 +67,10 @@ in
   };
 
   nixos.modules = [
-    ({ pkgs, ... }: {
+    ({ lib, pkgs, ... }: {
       programs.zsh.enable = true;
+      # After direnv's hook (programs.direnv adds its own earlier).
+      programs.zsh.interactiveShellInit = lib.mkAfter zoxideHook;
       users.users.${config.user}.shell = pkgs.zsh;
       # NixOS's /etc/zshrc already sets up history, completion and a
       # prompt; an empty ~/.zshrc only keeps the new-user wizard away.

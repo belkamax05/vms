@@ -1,5 +1,5 @@
 import { Text, useInput } from 'ink';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 
 import Box from '@/dev-tools/ui/components/Box';
 import ChipRow from '@/dev-tools/ui/components/ChipRow';
@@ -19,6 +19,7 @@ import {
   blankRecipe,
   type Catalog,
   familyOf,
+  isBuiltin,
   nameProblem,
   type Recipe,
   readRecipe,
@@ -40,25 +41,13 @@ export interface WizardViewProps {
   onCaptureInput: (captured: boolean) => void;
 }
 
-type Strategy = 'tools' | 'direnv' | 'none';
-
-type StepId =
-  | 'start'
-  | 'os'
-  | 'desktop'
-  | 'keyboard'
-  | 'environment'
-  | 'features'
-  | 'tools'
-  | 'machine'
-  | 'review';
+type StepId = 'start' | 'os' | 'desktop' | 'keyboard' | 'features' | 'tools' | 'machine' | 'review';
 
 const STEP_LABELS: Record<StepId, string> = {
   start: 'Start',
   os: 'OS',
   desktop: 'Desktop',
   keyboard: 'Keyboard',
-  environment: 'Environment',
   features: 'Features',
   tools: 'Tools',
   machine: 'Machine',
@@ -70,10 +59,9 @@ const STEP_INTRO: Record<StepId, string> = {
   os: 'The system the machine runs.',
   desktop: 'A desktop opens its own window; without one, the machine is a serial console.',
   keyboard: 'What typing produces - the interface stays English.',
-  environment:
-    'Where the dev tools come from: pre-installed on the machine, or from each repo through direnv.',
   features: 'What else it gets. Required features switch on with what needs them.',
-  tools: 'Pre-installed packages from the pinned nixpkgs - any nixpkgs name works, not just these.',
+  tools:
+    'Nix and direnv, so each repo can bring its own tools, and tools pre-installed from the pinned nixpkgs - any nixpkgs name works. Neither excludes the other.',
   machine: 'Its name, and how big it is. Enter types a value, + and - step it.',
   review: 'What gets built. Nothing is created until you say so.',
 };
@@ -87,8 +75,8 @@ const SIZES = [
 
 const check = (on: boolean) => (on ? '[x]' : '[ ]');
 
-const strategyOf = (recipe: Recipe): Strategy =>
-  recipe.features?.includes('direnv') ? 'direnv' : recipe.tools?.length ? 'tools' : 'none';
+/** The feature group shown in the Tools step, not Features: how tools arrive (Nix, direnv). */
+const ENVIRONMENT = 'Environment';
 
 /** A name nothing has yet: `<os>-<n>`. */
 const freeName = (repo: Repo, os: string) => {
@@ -121,7 +109,6 @@ export const WizardView = ({
   };
   const [origin, setOrigin] = useState<string | undefined>(from);
   const [recipe, setRecipe] = useState<Recipe>(() => startFrom(from));
-  const [strategy, setStrategy] = useState<Strategy>(() => strategyOf(startFrom(from)));
   const [name, setName] = useState(() => freeName(repo, startFrom(from).os));
   /** Typed by hand: then it stays; otherwise the suggestion follows the OS. */
   const [nameTyped, setNameTyped] = useState(false);
@@ -132,14 +119,10 @@ export const WizardView = ({
   const [cursor, setCursor] = useState(0);
   const [note, setNote] = useState<string | undefined>();
 
-  const steps: StepId[] = useMemo(
-    () =>
-      (Object.keys(STEP_LABELS) as StepId[]).filter(
-        (id) => id !== 'tools' || strategy === 'tools' || Boolean(recipe.tools?.length),
-      ),
-    [strategy, recipe.tools],
-  );
+  const steps = Object.keys(STEP_LABELS) as StepId[];
   const at = steps.indexOf(step);
+  const osLabel = catalog.os[recipe.os]?.label ?? recipe.os;
+  const family = familyOf(catalog, recipe.os);
   const resolved = resolveFeatures(catalog, recipe);
   const problems = recipeProblems(catalog, recipe);
   const nameIssue = nameProblem(repo, name);
@@ -170,6 +153,10 @@ export const WizardView = ({
     });
 
   const toggleFeature = (id: string) => {
+    if (isBuiltin(catalog, recipe, id)) {
+      setNote(`${catalog.features[id]?.label ?? id} is part of ${osLabel} - always there`);
+      return;
+    }
     const own = recipe.features?.includes(id);
     const by = resolved.requiredBy.get(id);
     if (!own && by) {
@@ -198,23 +185,6 @@ export const WizardView = ({
         : [...(draft.tools ?? []), tool];
     });
 
-  const chooseStrategy = (choice: Strategy) => {
-    setStrategy(choice);
-    update((draft) => {
-      const features = new Set(draft.features);
-      if (choice === 'direnv') features.add('direnv');
-      else {
-        features.delete('direnv');
-        // A direnv trust only means something with direnv.
-        for (const [id, feature] of Object.entries(catalog.features)) {
-          if (feature.requires?.includes('direnv')) features.delete(id);
-        }
-      }
-      draft.features = [...features];
-      if (choice !== 'tools') draft.tools = [];
-    });
-  };
-
   const setSize = (id: (typeof SIZES)[number]['id'], value: number) =>
     update((draft) => {
       draft[id] = Math.max(1, Math.round(value));
@@ -234,10 +204,39 @@ export const WizardView = ({
     }
   };
 
+  /** A feature's checkbox row: why it's on (required, part of the OS) or can't be. */
+  const featureRow = (id: string): PickItem<() => void> => {
+    const feature = catalog.features[id];
+    const on = resolved.on.has(id);
+    const builtin = isBuiltin(catalog, recipe, id);
+    const by = resolved.requiredBy.get(id);
+    const why = unavailable(catalog, recipe, id);
+    return {
+      id,
+      label: feature?.label ?? id,
+      hint: builtin
+        ? `part of ${osLabel} - always there`
+        : by
+          ? `required by ${catalog.features[by]?.label ?? by}`
+          : why && !on
+            ? why
+            : feature?.description,
+      hintColor: builtin || by ? colors.muted : why ? colors.warn : undefined,
+      disabled: Boolean(why) && !on,
+      controls: [
+        {
+          id: 'check',
+          glyph: check(on),
+          color: builtin ? colors.muted : on ? colors.ok : colors.muted,
+          onPress: () => toggleFeature(id),
+        },
+      ],
+      value: () => toggleFeature(id),
+    };
+  };
+
   // The step's rows, and what Enter (or a click) on each does.
   const recipes = machineSources(repo).filter((source) => source.kind !== 'module');
-  const osLabel = catalog.os[recipe.os]?.label ?? recipe.os;
-  const family = familyOf(catalog, recipe.os);
   let items: PickItem<() => void>[] = [];
   switch (step) {
     case 'start':
@@ -252,7 +251,6 @@ export const WizardView = ({
             const fresh = startFrom();
             suggestName(fresh.os);
             setRecipe(fresh);
-            setStrategy(strategyOf(fresh));
             next();
           },
         },
@@ -274,7 +272,6 @@ export const WizardView = ({
               setOrigin(source.name);
               const copy = startFrom(source.name);
               setRecipe(copy);
-              setStrategy(strategyOf(copy));
               suggestName(copy.os);
               next();
             },
@@ -358,69 +355,17 @@ export const WizardView = ({
           },
         }));
       break;
-    case 'environment':
-      items = (
-        [
-          [
-            'tools',
-            'Pre-installed tools',
-            'you pick them next - Bun, LazyGit, anything in nixpkgs',
-          ],
-          [
-            'direnv',
-            'Repo-provided (direnv)',
-            family === 'nixos'
-              ? 'direnv; each repo’s .envrc brings its tools'
-              : 'Nix + direnv; each repo’s .envrc brings its tools',
-          ],
-          ['none', 'Neither', 'just the system'],
-        ] as const
-      ).map(([id, label, hint]) => ({
-        id,
-        label,
-        hint,
-        isCurrent: strategy === id,
-        value: () => {
-          chooseStrategy(id);
-          if (id === 'tools') go('tools');
-          else go('features');
-        },
-      }));
-      break;
     case 'features': {
+      // Environment (Nix, direnv) is with the tools - it's how tools arrive too.
       const groups = new Map<string, string[]>();
       for (const [id, feature] of Object.entries(catalog.features)) {
         const group = feature.group ?? 'Other';
+        if (group === ENVIRONMENT) continue;
         groups.set(group, [...(groups.get(group) ?? []), id]);
       }
       items = [...groups].flatMap(([group, ids]) => [
         { id: `h-${group}`, label: group, isHeader: true },
-        ...ids.map((id) => {
-          const feature = catalog.features[id];
-          const on = resolved.on.has(id);
-          const by = resolved.requiredBy.get(id);
-          const why = unavailable(catalog, recipe, id);
-          return {
-            id,
-            label: feature?.label ?? id,
-            hint: by
-              ? `required by ${catalog.features[by]?.label ?? by}`
-              : why && !on
-                ? why
-                : feature?.description,
-            hintColor: by ? colors.muted : why ? colors.warn : undefined,
-            disabled: Boolean(why) && !on,
-            controls: [
-              {
-                id: 'check',
-                glyph: check(on),
-                color: on ? colors.ok : colors.muted,
-                onPress: () => toggleFeature(id),
-              },
-            ],
-            value: () => toggleFeature(id),
-          };
-        }),
+        ...ids.map(featureRow),
       ]);
       break;
     }
@@ -452,7 +397,16 @@ export const WizardView = ({
           value: () => toggleTool(tool),
         };
       };
+      const environment = Object.keys(catalog.features).filter(
+        (id) => catalog.features[id]?.group === ENVIRONMENT,
+      );
       items = [
+        ...(environment.length
+          ? [
+              { id: `h-${ENVIRONMENT}`, label: ENVIRONMENT, isHeader: true },
+              ...environment.map(featureRow),
+            ]
+          : []),
         ...groups.flatMap(([group, tools]) => [
           { id: `h-${group}`, label: group, isHeader: true },
           ...tools.map(toolRow(group)),

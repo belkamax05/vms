@@ -26,6 +26,9 @@ let
     let next = lib.unique (ids ++ lib.concatMap needs ids);
     in if next == ids then ids else close next;
 
+  # Features that are part of this OS (Nix on NixOS): on whatever the recipe says.
+  builtin = lib.attrNames (lib.filterAttrs (_: f: lib.elem family (f.builtinOn or [ ])) catalog.features);
+
   moduleOf = id:
     let f = feature id; in
     if f ? os && !(lib.elem family f.os) then throw "recipe: ${id} doesn't run on ${os}"
@@ -43,7 +46,7 @@ let
 in
 { pkgs, ... }:
 {
-  imports = [ osEntry.base ] ++ desktopModules ++ map moduleOf (close (recipe.features or [ ]))
+  imports = [ osEntry.base ] ++ desktopModules ++ map moduleOf (close ((recipe.features or [ ]) ++ builtin))
     ++ lib.optional (recipe ? keyboard) ../plugins/keyboard.nix;
 
   packages = map

@@ -14,8 +14,13 @@
 #                    os        the OSes it runs on (all when unset)
 #                    desktop   true: needs a desktop (a login to start from)
 #                    default   true: on in a blank recipe
+#                    builtinOn the OS families it's always on for - part of
+#                              the system there, not a choice
+#                  group "Environment" is shown with the tools, not with the
+#                  other features: Nix and direnv are how tools arrive too
 #   tools.<group>  nixpkgs attribute names the wizard suggests, grouped; any
 #                  other name works too
+#   defaultTools   the ones ticked in a blank recipe
 #   keyboards.<id> keyboard layouts (XKB names) - what typing produces; the
 #                  interface stays English
 #   presets.<id>   recipes to start from
@@ -79,9 +84,11 @@ let
       };
       nix = {
         label = "Nix";
-        description = "the Nix package manager, flakes on (NixOS has it anyway)";
+        description = "the Nix package manager, flakes on";
         group = "Environment";
         module = ../plugins/nix.nix;
+        default = true;
+        builtinOn = [ "nixos" ];
       };
       direnv = {
         label = "direnv";
@@ -90,6 +97,7 @@ let
         module = ../plugins/direnv.nix;
         requires = [ "zsh" ];
         requiresOn.ubuntu = [ "nix" ];
+        default = true;
       };
     };
 
@@ -103,6 +111,8 @@ let
       "AI" = [ "codex" ];
       "Desktop apps" = [ "firefox" ];
     };
+
+    defaultTools = [ "bun" ];
 
     # English first: a recipe without `keyboard` gets it.
     keyboards = {
@@ -134,6 +144,7 @@ in
     features = catalog.features // (extra.features or { });
     tools = lib.zipAttrsWith (_: lists: lib.unique (lib.concatLists lists)) [ catalog.tools (extra.tools or { }) ];
     keyboards = catalog.keyboards // (extra.keyboards or { });
+    defaultTools = lib.unique (catalog.defaultTools ++ (extra.defaultTools or [ ]));
     presets = catalog.presets // (extra.presets or { });
   };
 
@@ -141,6 +152,6 @@ in
     os = strip c.os;
     desktops = strip c.desktops;
     features = strip c.features;
-    inherit (c) tools keyboards presets;
+    inherit (c) tools defaultTools keyboards presets;
   };
 }
