@@ -528,12 +528,16 @@ export const down = async (name: string) => {
 
 const githubUserOf = (name: string) => readMeta(stateDir(name))?.githubUser;
 
+/** VMS_GITHUB=0: leave GitHub alone - offline, CI, or a throwaway test machine. */
+const githubOff = () => process.env.VMS_GITHUB === '0';
+
 /**
  * The machine's vm-ssh on its GitHub account (see core/github), so the guest can clone without
  * anyone adding it by hand - SSO, where an org enforces it, stays a click on GitHub's side. Run
  * on every `up` and whenever the key changes. `warn` gets what went wrong; it never stops `up`.
  */
 export const registerUserKey = (name: string, log: Log, warn: Log) => {
+  if (githubOff()) return;
   const account = githubUserOf(name);
   try {
     if (addKey(name, readText(join(stateDir(name), 'vm-ssh.pub')), account) === 'added')
@@ -570,7 +574,7 @@ export const addUserKeyToGithub = (name: string, log: Log) => {
 /** The machine's current vm-ssh off its GitHub account, before it's deleted or replaced. */
 const retireUserKey = (name: string, log: Log, warn: Log) => {
   const pubPath = join(stateDir(name), 'vm-ssh.pub');
-  if (!existsSync(pubPath)) return;
+  if (!existsSync(pubPath) || githubOff()) return;
   const account = githubUserOf(name);
   try {
     if (removeKey(readText(pubPath), account) === 'removed')

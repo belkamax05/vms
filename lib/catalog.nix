@@ -39,6 +39,8 @@ let
         family = "ubuntu";
         base = { imports = [ ../machines/ubuntu.nix ]; ubuntu.release = "24.04"; };
       };
+      arch = { label = "Arch Linux"; family = "arch"; base = ../machines/arch.nix; };
+      alpine = { label = "Alpine 3.24"; family = "alpine"; base = ../machines/alpine.nix; };
       nixos = { label = "NixOS 26.05"; family = "nixos"; base = ../machines/nixos.nix; };
       nixos-unstable = {
         label = "NixOS unstable";
@@ -91,6 +93,8 @@ let
         module = ../plugins/nix.nix;
         default = true;
         builtinOn = [ "nixos" ];
+        # Alpine: OpenRC, and the official installer's daemon mode needs systemd.
+        os = [ "ubuntu" "arch" "nixos" ];
       };
       direnv = {
         label = "direnv";
@@ -98,7 +102,7 @@ let
         group = "Environment";
         module = ../plugins/direnv.nix;
         requires = [ "zsh" ];
-        requiresOn.ubuntu = [ "nix" ];
+        requiresOn = { ubuntu = [ "nix" ]; arch = [ "nix" ]; };
         default = true;
       };
     };

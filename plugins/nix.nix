@@ -10,8 +10,13 @@ let
   version = "2.35.2";
 in
 {
-  ubuntu = {
-    packages = [ "curl" "xz-utils" ];
+  # What the official installer needs to fetch and unpack itself.
+  ubuntu.packages = [ "curl" "xz-utils" ];
+  arch.packages = [ "curl" "xz" ];
+
+  # Ubuntu and Arch - Alpine has no systemd for the daemon install, so the
+  # catalog doesn't offer Nix there.
+  cloud = {
     # Not written to /etc/nix/nix.conf directly: the installer writes that
     # file itself and would replace it. It appends this one instead.
     writeFiles = [{

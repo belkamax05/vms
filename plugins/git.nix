@@ -5,7 +5,7 @@
 # same git the host's ~/dotfiles profile has.
 { pkgs, ... }:
 {
-  ubuntu.nixPackages = [ pkgs.git ];
+  cloud.nixPackages = [ pkgs.git ];
 
   nixos.modules = [{
     programs.git.enable = true;

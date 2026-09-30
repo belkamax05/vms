@@ -22,7 +22,7 @@ in
   };
 
   config = {
-    ubuntu = {
+    cloud = {
       nixPackages = [ pkgs.direnv pkgs.nix-direnv ];
       # Config in /etc/direnv (DIRENV_CONFIG), like NixOS keeps it - not
       # ~/.config, which cloud-init would create as root's.

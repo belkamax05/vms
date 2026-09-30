@@ -35,7 +35,7 @@ let
   '';
 in
 {
-  ubuntu = {
+  cloud = {
     nixPackages = [ pkgs.zsh ];
     writeFiles = [
       # What bash's login gets from /etc/profile and ~/.profile (PATH,

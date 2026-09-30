@@ -5,7 +5,7 @@
 {
   imports = [ ./zsh.nix ];
 
-  ubuntu.nixPackages = [ pkgs.zoxide ];
+  cloud.nixPackages = [ pkgs.zoxide ];
 
   nixos.modules = [{
     programs.zoxide.enable = true;

@@ -18,7 +18,7 @@ in
     };
 
     os = mkOption {
-      type = types.enum [ "ubuntu" "nixos" ];
+      type = types.enum [ "ubuntu" "arch" "alpine" "nixos" ];
     };
 
     cpus = mkOption {
@@ -118,6 +118,40 @@ in
         default = { };
         description = "Any other top-level cloud-config keys, merged over the generated ones.";
       };
+    };
+
+    # Cloud-init fragments for every cloud-image guest - Ubuntu, Arch and
+    # Alpine alike (lib/cloud.nix). What a plugin needs on all three goes
+    # here; what's distro-specific (apt packages, a desktop's config) in
+    # that distro's own half.
+    cloud = {
+      nixPackages = mkOption {
+        type = types.listOf types.package;
+        default = [ ];
+        description = "Like ubuntu.nixPackages, on every cloud-image guest.";
+      };
+      writeFiles = mkOption {
+        type = types.listOf (types.attrsOf types.anything);
+        default = [ ];
+        description = "cloud-init write_files entries, on every cloud-image guest.";
+      };
+      runcmd = mkOption {
+        type = types.listOf (types.either types.str (types.listOf types.str));
+        default = [ ];
+        description = "cloud-init runcmd entries, on every cloud-image guest - after each distro's own.";
+      };
+    };
+
+    arch.packages = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      description = "pacman packages, from the Arch Linux Archive for the image's day (lib/cloud.nix).";
+    };
+
+    alpine.packages = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      description = "apk packages, from the image's stable branch (lib/cloud.nix).";
     };
 
     nixos.channel = mkOption {

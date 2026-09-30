@@ -76,6 +76,13 @@ const SIZES = [
 
 const check = (on: boolean) => (on ? '[x]' : '[ ]');
 
+const FAMILY_NAMES: Record<string, string> = {
+  ubuntu: 'Ubuntu',
+  nixos: 'NixOS',
+  arch: 'Arch Linux',
+  alpine: 'Alpine Linux',
+};
+
 /** The feature group shown in the Tools step, not Features: how tools arrive (Nix, direnv). */
 const ENVIRONMENT = 'Environment';
 
@@ -121,7 +128,10 @@ export const WizardView = ({
   const [cursor, setCursor] = useState<number | null>(null);
   const [note, setNote] = useState<string | undefined>();
 
-  const steps = Object.keys(STEP_LABELS) as StepId[];
+  // A keyboard layout only matters to a desktop: a serial console types with the host's.
+  const steps = (Object.keys(STEP_LABELS) as StepId[]).filter(
+    (id) => id !== 'keyboard' || Boolean(recipe.desktop),
+  );
   const at = steps.indexOf(step);
   const osLabel = catalog.os[recipe.os]?.label ?? recipe.os;
   const family = familyOf(catalog, recipe.os);
@@ -291,7 +301,7 @@ export const WizardView = ({
       items = [...families].flatMap(([family, entries]) => [
         {
           id: `h-${family}`,
-          label: family === 'nixos' ? 'NixOS' : family === 'ubuntu' ? 'Ubuntu' : family,
+          label: FAMILY_NAMES[family] ?? family,
           isHeader: true,
         },
         ...entries.map(([id, os]) => ({
@@ -304,6 +314,11 @@ export const WizardView = ({
               draft.os = id;
               const desktop = draft.desktop ? catalog.desktops[draft.desktop] : undefined;
               if (desktop && !desktop.os.includes(familyOf(catalog, id))) draft.desktop = null;
+              // Features the new OS can't have (Nix on Alpine) go, rather than
+              // leaving a recipe that can't build.
+              draft.features = (draft.features ?? []).filter(
+                (feature) => !unavailable(catalog, draft, feature),
+              );
             });
             next();
           },

@@ -4,7 +4,7 @@
 {
   imports = [ ./zsh.nix ];
 
-  ubuntu = {
+  cloud = {
     nixPackages = [ pkgs.starship ];
     writeFiles = [{
       path = "/etc/zshrc.d/starship.zsh";

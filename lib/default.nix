@@ -97,7 +97,7 @@ rec {
           EOF
         '';
 
-      builder = { ubuntu = ./ubuntu.nix; nixos = ./nixos.nix; }.${cfg.os};
+      builder = { ubuntu = ./cloud.nix; arch = ./cloud.nix; alpine = ./cloud.nix; nixos = ./nixos.nix; }.${cfg.os};
     in
     import builder {
       inherit pkgs lib cfg mkRunner lockFile hostRequests;
