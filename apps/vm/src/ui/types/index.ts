@@ -11,3 +11,10 @@ export type Tone = 'ok' | 'warn' | 'error' | 'info';
 export interface Session {
   selected?: string;
 }
+
+/**
+ * What the dashboard is doing to a machine, while it does it: `booting` for an `up` (build,
+ * lock, launch), `working` for anything else. Per machine, so one machine's action never holds
+ * up another's.
+ */
+export type Work = 'booting' | 'working';

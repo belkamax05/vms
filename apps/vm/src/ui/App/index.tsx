@@ -15,7 +15,7 @@ import { machineStatus } from '../../core/machine';
 import { type Catalog, cachedCatalog, fetchCatalog } from '../../core/recipes';
 import { machineNames, type Repo } from '../../core/repo';
 import vmTheme from '../theme';
-import type { Handoff, Session, Tone } from '../types';
+import type { Handoff, Session, Tone, Work } from '../types';
 import MachinesView from '../views/MachinesView';
 import WizardView, { CatalogPending } from '../views/WizardView';
 
@@ -98,6 +98,11 @@ export const App = ({
     );
   }, [repo]);
   useEffect(readCatalog, [readCatalog]);
+  /**
+   * The machines an action is running on, and which kind - here rather than in MachinesView so
+   * an `up` still shows (and still blocks a second one) after a trip through the wizard.
+   */
+  const [working, setWorking] = useState<Readonly<Record<string, Work>>>({});
   /** A machine the wizard just made with Create & up - MachinesView boots it once it's listed. */
   const [bootNext, setBootNext] = useState<string | undefined>();
 
@@ -220,6 +225,8 @@ export const App = ({
           repo={repo}
           statuses={statuses}
           isLoading={snapshot.isLoading}
+          working={working}
+          setWorking={setWorking}
           session={session}
           notify={notify}
           reload={reload}

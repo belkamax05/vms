@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { relative } from 'node:path';
 
 import { Text, useInput } from 'ink';
+import type { Dispatch, SetStateAction } from 'react';
 import { useEffect, useState } from 'react';
 
 import Box from '@/dev-tools/ui/components/Box';
@@ -10,6 +11,7 @@ import ListDetail from '@/dev-tools/ui/components/ListDetail';
 import Panel from '@/dev-tools/ui/components/Panel';
 import type { PickItem } from '@/dev-tools/ui/components/PickList';
 import Toolbar, { type ToolbarAction } from '@/dev-tools/ui/components/Toolbar';
+import useAnimationClock from '@/dev-tools/ui/hooks/useAnimationClock';
 import usePrompt from '@/dev-tools/ui/hooks/usePrompt';
 import { useColors } from '@/dev-tools/ui/providers/TuiThemeProvider';
 import openUrl from '@/dev-tools/utils/system/openUrl';
@@ -29,12 +31,15 @@ import { ensureLocked } from '../../../core/lock';
 import { forgetRecipe } from '../../../core/recipes';
 import { lockFile, machineFile, machineSource, type Repo, VM_BIN } from '../../../core/repo';
 import copyToClipboard from '../../clipboard';
-import type { Handoff, Session, Tone } from '../../types';
+import type { Handoff, Session, Tone, Work } from '../../types';
 
 export interface MachinesViewProps {
   repo: Repo;
   statuses: MachineStatus[];
   isLoading: boolean;
+  /** The machines an action is running on (App's, so it outlives a trip through the wizard). */
+  working: Readonly<Record<string, Work>>;
+  setWorking: Dispatch<SetStateAction<Readonly<Record<string, Work>>>>;
   session: Session;
   notify: (text: string, tone?: Tone) => void;
   reload: () => void;
@@ -52,6 +57,10 @@ export interface MachinesViewProps {
 const LOG_LINES = 30;
 
 const MARK: Record<MachineStatus['state'], string> = { running: '●', stopped: '○', absent: '·' };
+
+/** Drawn in place of a booting machine's mark - a PickList label is a string, so no component. */
+const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const SPINNER_FPS = 10;
 
 /**
  * `vm <args>` on the whole terminal. `pause: 'always'` keeps its output on screen until Enter
@@ -86,6 +95,8 @@ export const MachinesView = ({
   repo,
   statuses,
   isLoading,
+  working,
+  setWorking,
   session,
   notify,
   reload,
@@ -98,8 +109,23 @@ export const MachinesView = ({
 }: MachinesViewProps) => {
   const colors = useColors();
   const prompt = usePrompt(onCaptureInput);
-  /** The machine an action is running on, while it runs. */
-  const [working, setWorking] = useState<string | undefined>();
+  /** Whether an action is running on `name` - only that machine's actions wait for it. */
+  const busy = (name: string) => Boolean(working[name]);
+  const setWork = (name: string, work?: Work) =>
+    setWorking((previous) => {
+      const { [name]: _, ...rest } = previous;
+      return work ? { ...rest, [name]: work } : rest;
+    });
+  const workingOn = Object.keys(working);
+  /**
+   * A handoff (ssh, a console, `vm lock`) gives the terminal away with a blocking spawn, which
+   * would stall another machine's build mid-stream - so those wait until nothing is working.
+   */
+  const canHandOff = workingOn.length === 0;
+  const isBooting = workingOn.some((name) => working[name] === 'booting');
+  // Ticks only while something boots: every tick re-renders the dashboard.
+  const time = useAnimationClock(isBooting, SPINNER_FPS);
+  const spinner = SPINNER[Math.floor(time * SPINNER_FPS) % SPINNER.length];
   /** Machines whose last `up` from here failed - their console log says why, in the detail pane. */
   const [failedUp, setFailedUp] = useState<ReadonlySet<string>>(new Set());
   /** Each machine's last error, shown in its detail pane until its next action. */
@@ -126,21 +152,25 @@ export const MachinesView = ({
 
   const items: PickItem<MachineStatus>[] = statuses.map((status) => ({
     id: status.name,
-    label: `${MARK[status.state]} ${status.name}`,
-    hint:
-      working === status.name
-        ? 'working…'
-        : status.state === 'running'
-          ? `:${status.sshPort}`
-          : status.state === 'stopped'
-            ? 'stopped'
-            : undefined,
+    label: `${working[status.name] === 'booting' ? spinner : MARK[status.state]} ${status.name}`,
+    hint: working[status.name]
+      ? `${working[status.name]}…`
+      : status.state === 'running'
+        ? `:${status.sshPort}`
+        : status.state === 'stopped'
+          ? 'stopped'
+          : undefined,
     hintColor: status.state === 'running' ? colors.ok : colors.muted,
     value: status,
   }));
 
-  const act = async (name: string, label: string, action: () => Promise<string | undefined>) => {
-    setWorking(name);
+  const act = async (
+    name: string,
+    label: string,
+    action: () => Promise<string | undefined>,
+    work: Work = 'working',
+  ) => {
+    setWork(name, work);
     setError(name);
     notify(`${label}…`);
     try {
@@ -149,7 +179,7 @@ export const MachinesView = ({
     } catch (error) {
       fail(name, error);
     } finally {
-      setWorking(undefined);
+      setWork(name);
       reload();
     }
   };
@@ -163,33 +193,38 @@ export const MachinesView = ({
     });
 
   const up = (status: MachineStatus | undefined) => {
-    if (!status || working || status.state === 'running') return;
+    if (!status || busy(status.name) || status.state === 'running') return;
     markFailed(status.name, false);
-    void act(status.name, `Starting ${status.name}`, async () => {
-      try {
-        await ensureLocked(
-          repo,
-          status.name,
-          (text) => notify(text),
-          (line) => notify(`${status.name}: ${line}`),
-        );
-        await upDetached(
-          repo,
-          status.name,
-          (text) => notify(text),
-          (line) => notify(`${status.name}: ${line}`),
-          warnFor(status.name),
-        );
-      } catch (error) {
-        markFailed(status.name, true);
-        throw error;
-      }
-      return `${status.name} is booting - [s] waits for SSH and gets in`;
-    });
+    void act(
+      status.name,
+      `Starting ${status.name}`,
+      async () => {
+        try {
+          await ensureLocked(
+            repo,
+            status.name,
+            (text) => notify(text),
+            (line) => notify(`${status.name}: ${line}`),
+          );
+          await upDetached(
+            repo,
+            status.name,
+            (text) => notify(text),
+            (line) => notify(`${status.name}: ${line}`),
+            warnFor(status.name),
+          );
+        } catch (error) {
+          markFailed(status.name, true);
+          throw error;
+        }
+        return `${status.name} is booting - [s] waits for SSH and gets in`;
+      },
+      'booting',
+    );
   };
 
   const console_ = (status: MachineStatus | undefined) => {
-    if (!status || working || status.state === 'running' || status.meta?.gui) return;
+    if (!status || !canHandOff || status.state === 'running' || status.meta?.gui) return;
     onHandoff({
       type: 'run',
       command: vmCommand(['up', status.name], 'error'),
@@ -199,7 +234,7 @@ export const MachinesView = ({
   };
 
   const sshInto = (status: MachineStatus | undefined) => {
-    if (!status || working || status.state !== 'running') return;
+    if (!status || !canHandOff || status.state !== 'running') return;
     onHandoff({
       type: 'run',
       command: vmCommand(['ssh', status.name], 'error'),
@@ -209,7 +244,7 @@ export const MachinesView = ({
   };
 
   const powerOff = (status: MachineStatus | undefined) => {
-    if (!status || working || status.state !== 'running') return;
+    if (!status || busy(status.name) || status.state !== 'running') return;
     prompt.confirm(
       `Power ${status.name} off? Its disk is kept for the next up.`,
       () =>
@@ -221,7 +256,7 @@ export const MachinesView = ({
   };
 
   const destroy = (status: MachineStatus | undefined) => {
-    if (!status || working || status.state === 'absent') return;
+    if (!status || busy(status.name) || status.state === 'absent') return;
     prompt.confirm(
       `Kill ${status.name}? Powers it off and deletes its disk and vm-ssh key - ${status.stateDir}.`,
       () =>
@@ -234,7 +269,7 @@ export const MachinesView = ({
   };
 
   const relock = (status: MachineStatus | undefined) => {
-    if (!status || working || !status.meta?.apt) return;
+    if (!status || !canHandOff || !status.meta?.apt) return;
     onHandoff({
       type: 'run',
       command: vmCommand(['lock', status.name], 'always'),
@@ -244,7 +279,7 @@ export const MachinesView = ({
   };
 
   const rotateKey = (status: MachineStatus | undefined) => {
-    if (!status?.publicKey || working) return;
+    if (!status?.publicKey || busy(status.name)) return;
     prompt.confirm(
       `Rotate ${status.name}'s vm-ssh key? The old one comes off GitHub and stops working; the new one goes on.`,
       () =>
@@ -258,7 +293,7 @@ export const MachinesView = ({
 
   /** On the terminal: gh may need GitHub's approval in the browser first. */
   const addToGithub = (status: MachineStatus | undefined) => {
-    if (!status?.publicKey || working) return;
+    if (!status?.publicKey || !canHandOff) return;
     onHandoff({
       type: 'run',
       command: vmCommand(['key', status.name, '--github'], 'always'),
@@ -269,13 +304,12 @@ export const MachinesView = ({
 
   /** The wizard, from this machine when it's a recipe - a hand-written one can't be copied. */
   const newMachine = (status: MachineStatus | undefined) => {
-    if (working) return;
     const source = status && machineSource(repo, status.name);
     onNew(source && source.kind !== 'module' ? status?.name : undefined);
   };
 
   const forget = (status: MachineStatus | undefined) => {
-    if (!status || working || machineSource(repo, status.name)?.kind !== 'mine') return;
+    if (!status || busy(status.name) || machineSource(repo, status.name)?.kind !== 'mine') return;
     prompt.confirm(
       `Forget ${status.name}? Its recipe is deleted; the machine is already gone.`,
       () => {
@@ -293,7 +327,7 @@ export const MachinesView = ({
   // The wizard's Create & up: boot it once the list has it.
   useEffect(() => {
     const status = bootNext && statuses.find((entry) => entry.name === bootNext);
-    if (!status || working) return;
+    if (!status || busy(status.name)) return;
     onBooted();
     up(status);
   });
@@ -305,7 +339,7 @@ export const MachinesView = ({
   };
 
   const exportKey = (status: MachineStatus | undefined) => {
-    if (!status?.publicKey || working) return;
+    if (!status?.publicKey || busy(status.name)) return;
     prompt.ask(
       `Export ${status.name}'s PRIVATE key - keep it secret. Save to:`,
       (file) => {
@@ -327,7 +361,7 @@ export const MachinesView = ({
   };
 
   const importKey = (status: MachineStatus | undefined) => {
-    if (!status || working) return;
+    if (!status || busy(status.name)) return;
     prompt.ask(`Private key file to make ${status.name}'s vm-ssh:`, (file) => {
       if (!file.trim()) return;
       prompt.confirm(
@@ -349,7 +383,6 @@ export const MachinesView = ({
 
   useInput(
     (input) => {
-      if (working) return;
       if (input === 'u') up(current);
       else if (input === 'c') console_(current);
       else if (input === 's') sshInto(current);
@@ -371,19 +404,42 @@ export const MachinesView = ({
     const isRunning = status.state === 'running';
     const actions: ToolbarAction[] = isRunning
       ? [
-          { hotkey: 's', label: 'SSH', onPress: () => sshInto(status), tone: 'primary' },
+          {
+            hotkey: 's',
+            label: 'SSH',
+            onPress: () => sshInto(status),
+            tone: 'primary',
+            disabled: !canHandOff,
+          },
           { hotkey: 'd', label: 'Power off', onPress: () => powerOff(status) },
         ]
       : [
           { hotkey: 'u', label: 'Up', onPress: () => up(status), tone: 'primary' },
           ...(status.meta?.gui
             ? []
-            : [{ hotkey: 'c', label: 'Console', onPress: () => console_(status) }]),
+            : [
+                {
+                  hotkey: 'c',
+                  label: 'Console',
+                  onPress: () => console_(status),
+                  disabled: !canHandOff,
+                },
+              ]),
         ];
     if (status.meta?.apt)
-      actions.push({ hotkey: 'l', label: 'Lock', onPress: () => relock(status) });
+      actions.push({
+        hotkey: 'l',
+        label: 'Lock',
+        onPress: () => relock(status),
+        disabled: !canHandOff,
+      });
     if (status.publicKey) {
-      actions.push({ hotkey: 'g', label: 'Add to GitHub', onPress: () => addToGithub(status) });
+      actions.push({
+        hotkey: 'g',
+        label: 'Add to GitHub',
+        onPress: () => addToGithub(status),
+        disabled: !canHandOff,
+      });
       actions.push({ hotkey: 'y', label: 'Copy key', onPress: () => copyKey(status) });
       actions.push({ hotkey: 'k', label: 'Rotate key', onPress: () => rotateKey(status) });
       actions.push({ hotkey: 'e', label: 'Export key', onPress: () => exportKey(status) });
@@ -395,14 +451,14 @@ export const MachinesView = ({
     } else if (machineSource(repo, status.name)?.kind === 'mine') {
       actions.push({ hotkey: 'f', label: 'Forget', onPress: () => forget(status), tone: 'danger' });
     }
-    return actions.map((action) => ({ ...action, disabled: Boolean(working) }));
+    return actions.map((action) => ({ ...action, disabled: action.disabled || busy(status.name) }));
   };
 
   const running = statuses.filter((status) => status.state === 'running').length;
   const header = prompt.line ?? (
-    <Text color={working ? colors.warn : colors.muted} wrap="truncate">
+    <Text color={workingOn.length ? colors.warn : colors.muted} wrap="truncate">
       {`${statuses.length} machines · ${running} running`}
-      {working ? ` · working on ${working}…` : ''}
+      {workingOn.length ? ` · working on ${workingOn.join(', ')}…` : ''}
     </Text>
   );
 
