@@ -167,18 +167,11 @@ in
     # (`vm lock`), from Debian's archive and snapshot.debian.org.
     debian = distroHalf "apt packages, locked in <name>.lock.json like Ubuntu's (lib/cloud.nix)." "Debian";
 
-    # Fedora, Rocky and AlmaLinux share package names for what plugins need.
-    dnf.packages = mkOption {
-      type = types.listOf types.str;
-      default = [ ];
-      description = "dnf packages, on Fedora, Rocky and AlmaLinux - each from its pinned release (lib/cloud.nix).";
-    };
+    # Fedora, Rocky and AlmaLinux share package names for what plugins need
+    # - one half for the three, from each one's pinned release (lib/cloud.nix).
+    dnf = distroHalf "dnf packages, on Fedora, Rocky and AlmaLinux - each from its pinned release (lib/cloud.nix)." "Fedora, Rocky and AlmaLinux";
 
-    opensuse.packages = mkOption {
-      type = types.listOf types.str;
-      default = [ ];
-      description = "zypper packages, from openSUSE Leap's release repo (lib/cloud.nix).";
-    };
+    opensuse = distroHalf "zypper packages, from openSUSE Leap's release repo (lib/cloud.nix)." "openSUSE";
 
     alpine = {
       packages = mkOption {

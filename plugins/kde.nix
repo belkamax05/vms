@@ -19,6 +19,10 @@ in
   debian.packages = [ "kde-plasma-desktop" "sddm" ];
   arch.packages = [ "plasma-desktop" "sddm" "konsole" ];
   alpine.packages = [ "plasma-desktop" "sddm" "konsole" ];
+  # Fedora's, though the half is Rocky's and Alma's too: they only have
+  # Plasma from EPEL, which isn't pinned - the catalog doesn't offer it there.
+  dnf.packages = [ "plasma-desktop" "plasma-workspace" "sddm" "konsole" "mesa-dri-drivers" ];
+  opensuse.packages = [ "plasma6-desktop" "plasma6-session" "sddm-qt6" "konsole" "Mesa-dri" ];
 
   # The same on every distro.
   cloud = {

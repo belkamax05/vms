@@ -26,6 +26,18 @@ let
       idle-delay=uint32 0
     '';
   };
+
+  # /etc/gdm/custom.conf where GDM's package ships it as a config file - this
+  # one is written first, and rpm keeps it (the package's lands as .rpmnew).
+  gdmAutologin = {
+    path = "/etc/gdm/custom.conf";
+    content = ''
+      [daemon]
+      AutomaticLoginEnable=true
+      AutomaticLogin=${config.user}
+      InitialSetupEnable=false
+    '';
+  };
 in
 {
   imports = [ ./desktop.nix ];
@@ -77,6 +89,20 @@ in
         AutomaticLogin=${config.user}
       '';
     }];
+  };
+
+  # The RPM distros: GNOME's parts by name, as on Arch, rather than a group
+  # (`installed` checks with rpm -q). Wayland only - Fedora and EL10 dropped
+  # GNOME's X11 session. GDM would run gnome-initial-setup first, which
+  # weak deps pull in: off, since the user is already made.
+  dnf = {
+    packages = [ "gdm" "gnome-shell" "gnome-session-wayland-session" "gnome-control-center" "ptyxis" "nautilus" "dconf" "mesa-dri-drivers" ];
+    writeFiles = [ gdmAutologin ];
+  };
+
+  opensuse = {
+    packages = [ "gdm" "gnome-shell" "gnome-session-wayland" "gnome-control-center" "ptyxis" "nautilus" "dconf" "Mesa-dri" ];
+    writeFiles = [ gdmAutologin ];
   };
 
   alpine = {

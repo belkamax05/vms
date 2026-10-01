@@ -7,10 +7,25 @@
 # without systemd), and the desktop's display manager (`desktop.displayManager`,
 # which each desktop sets) enabled in OpenRC and started.
 { config, lib, ... }:
+
+let
+  enableByName = [
+    [
+      "sh"
+      "-c"
+      (lib.concatStringsSep "; " [
+        "if command -v dconf >/dev/null; then dconf update; fi"
+        "systemctl enable ${config.desktop.displayManager}"
+        "systemctl set-default graphical.target"
+        "systemctl start --no-block ${config.desktop.displayManager}"
+      ])
+    ]
+  ];
+in
 {
   options.desktop.displayManager = lib.mkOption {
     type = lib.types.str;
-    description = "The display manager's OpenRC service (Alpine): gdm, sddm, lightdm.";
+    description = "The display manager's service, enabled by name (Alpine's OpenRC, and systemd on Arch and the RPM distros): gdm, sddm, lightdm.";
   };
 
   config = {
@@ -44,19 +59,12 @@
     };
 
     # Arch: nothing points display-manager.service at a display manager
-    # until it's enabled, so enable it by name.
-    arch.runcmd = [
-      [
-        "sh"
-        "-c"
-        (lib.concatStringsSep "; " [
-          "if command -v dconf >/dev/null; then dconf update; fi"
-          "systemctl enable ${config.desktop.displayManager}"
-          "systemctl set-default graphical.target"
-          "systemctl start --no-block ${config.desktop.displayManager}"
-        ])
-      ]
-    ];
+    # until it's enabled, so enable it by name. The same on the RPM distros
+    # (Fedora, Rocky, Alma - one `dnf` half - and openSUSE), whose cloud
+    # images boot to multi-user.target with no display manager at all.
+    arch.runcmd = enableByName;
+    dnf.runcmd = enableByName;
+    opensuse.runcmd = enableByName;
 
     # Debian: as Ubuntu - its packages make their display manager the
     # display-manager.service - without Ubuntu's snap stubs to keep out. But

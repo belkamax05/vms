@@ -81,8 +81,8 @@ let
     inherit image;
     packages = lib.unique cfg.dnf.packages;
     nixPackages = [ ];
-    writeFiles = pin;
-    runcmd = [ ];
+    writeFiles = pin ++ cfg.dnf.writeFiles;
+    runcmd = cfg.dnf.runcmd;
     adminGroup = "wheel";
     shell = "/bin/bash";
     console = systemdConsole;
@@ -229,8 +229,8 @@ let
       };
       packages = lib.unique cfg.opensuse.packages;
       nixPackages = [ ];
-      writeFiles = [ ];
-      runcmd = [ ];
+      writeFiles = cfg.opensuse.writeFiles;
+      runcmd = cfg.opensuse.runcmd;
       adminGroup = "wheel";
       shell = "/bin/bash";
       console = systemdConsole;

@@ -55,8 +55,8 @@ let
     };
 
     desktops = {
-      gnome = { label = "GNOME"; module = ../plugins/gui.nix; os = [ "ubuntu" "debian" "arch" "alpine" "nixos" ]; default = true; };
-      kde = { label = "KDE Plasma"; module = ../plugins/kde.nix; os = [ "ubuntu" "debian" "arch" "alpine" "nixos" ]; };
+      gnome = { label = "GNOME"; module = ../plugins/gui.nix; os = [ "ubuntu" "debian" "fedora" "rocky" "alma" "opensuse" "arch" "alpine" "nixos" ]; default = true; };
+      kde = { label = "KDE Plasma"; module = ../plugins/kde.nix; os = [ "ubuntu" "debian" "fedora" "opensuse" "arch" "alpine" "nixos" ]; };
       xfce = { label = "XFCE"; module = ../plugins/xfce.nix; os = [ "ubuntu" "debian" "arch" "alpine" "nixos" ]; };
       cinnamon = { label = "Cinnamon"; module = ../plugins/cinnamon.nix; os = [ "ubuntu" "nixos" ]; };
       cosmic = { label = "COSMIC"; module = ../plugins/cosmic.nix; os = [ "nixos" ]; };
