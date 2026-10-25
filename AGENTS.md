@@ -17,9 +17,11 @@ action. The user stages and commits everything themselves. See
   snapshot, resumable first boot). Anything else,
   including Nix on Ubuntu, a desktop, or dotfiles, goes in a `plugins/`
   file that a machine opts into. Never put it in a builder.
-- **One plugin file serves both OSes.** A plugin sets `ubuntu.*` and/or
-  `nixos.modules`. Don't split a plugin into per-OS files, and don't
-  branch on `os` inside one.
+- **One plugin file serves every OS.** A plugin sets `ubuntu.*` (and the
+  other cloud halves), `nixos.modules` and/or `windows.*`. Don't split a
+  plugin into per-OS files, and don't branch on `os` inside one.
+  `lib/windows.nix` is a builder like the others: only what it takes to log
+  in and be reached (the user, autologon, OpenSSH, the keys).
 - **Every machine produces the same runner shape** (`bin/vm-run` + `meta`,
   see `lib/default.nix`). `vm` (`apps/vm`) must never branch on the OS
   beyond hiding an action that can't apply (`Lock` on NixOS).
@@ -38,7 +40,10 @@ action. The user stages and commits everything themselves. See
 - **All of a machine's host state lives in `~/.local/state/vms/<name>/`**,
   so that `vm kill` removes it with a single `rm -rf`. Nothing may write
   outside it, except the shared `id_ed25519` keypair next to it.
-- **Pin every external input.** That covers the Ubuntu image (URL + hash),
+- **Pin every external input.** That covers the Windows ISO (a fixed URL, its
+  hash in the machine's lockfile from `vm lock`, which `up` runs - never a
+  download the user does by hand) and every installer a Windows half fetches
+  (URL + hash, never Windows Update), the Ubuntu image (URL + hash),
   the apt snapshot (bumped with the image), every `.deb` an Ubuntu machine
   installs (its `machines/<name>.lock.json`, from `vm lock` - re-run it when
   a machine's packages or the snapshot change, and the user tracks it), the

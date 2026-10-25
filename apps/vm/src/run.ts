@@ -17,6 +17,7 @@ import {
 import {
   blankRecipe,
   forgetRecipe,
+  hasTools,
   loadCatalog,
   nameProblem,
   type Recipe,
@@ -202,7 +203,10 @@ export const run = async (...argv: string[]) => {
         recipe.features = [...new Set([...(recipe.features ?? []), ...list('--features')])].filter(
           (id) => !without.has(id),
         );
-        recipe.tools = [...new Set([...(recipe.tools ?? []), ...list('--tools')])];
+        // Where nixpkgs brings no tools (Windows), only those asked for by name stay - to fail.
+        recipe.tools = hasTools(catalog, recipe.os)
+          ? [...new Set([...(recipe.tools ?? []), ...list('--tools')])]
+          : list('--tools');
         for (const [flag, key] of [
           ['--cpus', 'cpus'],
           ['--memory', 'memory'],

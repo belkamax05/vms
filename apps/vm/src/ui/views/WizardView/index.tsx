@@ -20,6 +20,8 @@ import {
   blankRecipe,
   type Catalog,
   familyOf,
+  hasDesktops,
+  hasTools,
   isBuiltin,
   nameProblem,
   type Recipe,
@@ -86,6 +88,7 @@ const FAMILY_NAMES: Record<string, string> = {
   opensuse: 'openSUSE',
   arch: 'Arch Linux',
   alpine: 'Alpine Linux',
+  windows: 'Windows',
 };
 
 /** The feature group shown in the Tools step, not Features: how tools arrive (Nix, direnv). */
@@ -133,9 +136,13 @@ export const WizardView = ({
   const [cursor, setCursor] = useState<number | null>(null);
   const [note, setNote] = useState<string | undefined>();
 
-  // A keyboard layout only matters to a desktop: a serial console types with the host's.
+  // A keyboard layout only matters to a desktop: a serial console types with the host's. No
+  // desktop step where none runs, no tools step where nixpkgs can't bring them (Windows).
   const steps = (Object.keys(STEP_LABELS) as StepId[]).filter(
-    (id) => id !== 'keyboard' || Boolean(recipe.desktop),
+    (id) =>
+      (id !== 'keyboard' || Boolean(recipe.desktop)) &&
+      (id !== 'desktop' || hasDesktops(catalog, recipe.os)) &&
+      (id !== 'tools' || hasTools(catalog, recipe.os)),
   );
   const at = steps.indexOf(step);
   const osLabel = catalog.os[recipe.os]?.label ?? recipe.os;
@@ -324,6 +331,7 @@ export const WizardView = ({
               draft.features = (draft.features ?? []).filter(
                 (feature) => !unavailable(catalog, draft, feature),
               );
+              if (!hasTools(catalog, id)) draft.tools = [];
             });
             next();
           },

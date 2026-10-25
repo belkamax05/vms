@@ -6,7 +6,8 @@
 #
 #   os.<id>        the base machine a recipe starts from; `family` (ubuntu,
 #                  nixos) is what features' `os` and `requiresOn` name, so a
-#                  feature needn't list every release
+#                  feature needn't list every release; `tools = false`: no
+#                  nixpkgs tools there (Windows)
 #   desktops.<id>  a desktop, with the OS families it runs on
 #   features.<id>  a plugin (or any module) to toggle:
 #                    group     the heading the wizard files it under
@@ -32,6 +33,9 @@
 { lib }:
 
 let
+  # Every family but Windows - for the shell features, which have no Windows half.
+  linux = [ "ubuntu" "debian" "fedora" "rocky" "alma" "opensuse" "arch" "alpine" "nixos" ];
+
   catalog = {
     os = {
       ubuntu = { label = "Ubuntu 26.04"; family = "ubuntu"; base = ../machines/ubuntu.nix; };
@@ -48,6 +52,8 @@ let
       arch = { label = "Arch Linux"; family = "arch"; base = ../machines/arch.nix; };
       alpine = { label = "Alpine 3.24"; family = "alpine"; base = ../machines/alpine.nix; };
       nixos = { label = "NixOS unstable"; family = "nixos"; base = ../machines/nixos.nix; };
+      # Its own desktop, and no nixpkgs: no desktops or tools to pick.
+      windows = { label = "Windows 11"; family = "windows"; base = ../machines/windows.nix; tools = false; };
     };
 
     desktops = {
@@ -78,6 +84,7 @@ let
         description = "as the login shell";
         group = "Shell";
         module = ../plugins/zsh.nix;
+        os = linux;
         default = true;
       };
       starship = {
@@ -85,6 +92,7 @@ let
         description = "the prompt, hooked into zsh";
         group = "Shell";
         module = ../plugins/starship.nix;
+        os = linux;
         requires = [ "zsh" ];
       };
       zoxide = {
@@ -92,6 +100,7 @@ let
         description = "`z <part of a path>`, hooked into zsh";
         group = "Shell";
         module = ../plugins/zoxide.nix;
+        os = linux;
         requires = [ "zsh" ];
       };
       nix = {
@@ -111,6 +120,7 @@ let
         description = "each repo's .envrc sets its tools up on cd (nix-direnv)";
         group = "Environment";
         module = ../plugins/direnv.nix;
+        os = linux;
         requires = [ "zsh" ];
         # Where Nix can be installed and isn't the system itself; elsewhere
         # direnv runs without it, for .envrc files that don't `use nix`.

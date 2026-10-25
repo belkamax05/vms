@@ -1,6 +1,6 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 
 import {
   firstFreePort,
@@ -15,6 +15,7 @@ import {
   VmError,
   waitSsh,
 } from '../machine';
+import { byLine, nixLogReader } from '../progress';
 import { isImpure, lockFile, machineSource, type Repo, stateDir } from '../repo';
 
 const RESOLVE = readFileSync(join(import.meta.dir, 'resolve.sh'), 'utf8');
@@ -66,17 +67,69 @@ const isTracked = (repo: Repo, path: string) =>
   }).status === 0;
 
 /**
+ * A machine installed from an ISO (Windows): download it - into the Nix store, by the name its
+ * build's fetchurl gives it, so the build then finds it there instead of fetching it again - and
+ * write down its URL and sha256. The one download that isn't checked against a known hash: what
+ * it gets is what every later build is held to.
+ */
+const lockIso = (name: string, url: string, target: string, log: Log, onOutput?: Log) =>
+  new Promise<void>((resolve, reject) => {
+    log(`${name}: downloading ${basename(url)} once, to pin its hash - the build reuses it`);
+    // On a terminal Nix draws its own bar; under the dashboard its JSON log feeds the status line's.
+    const child = spawn(
+      'nix',
+      [
+        'store',
+        'prefetch-file',
+        '--json',
+        ...(onOutput ? ['--log-format', 'internal-json'] : []),
+        url,
+      ],
+      { stdio: ['ignore', 'pipe', onOutput ? 'pipe' : 'inherit'] },
+    );
+    let stdout = '';
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    const stderr = onOutput ? byLine(nixLogReader(onOutput, onOutput)) : undefined;
+    if (stderr) child.stderr?.on('data', stderr);
+    child.on('error', (error) => reject(new VmError(`nix: ${error.message}`)));
+    child.on('close', (code) => {
+      stderr?.();
+      let hash: string | undefined;
+      try {
+        hash = JSON.parse(stdout).hash;
+      } catch {
+        hash = undefined;
+      }
+      if (code !== 0 || !hash) {
+        reject(new VmError(`${name}: downloading ${url} failed`));
+        return;
+      }
+      writeFileSync(`${target}.tmp`, `${JSON.stringify({ url, sha256: hash }, null, 2)}\n`);
+      renameSync(`${target}.tmp`, target);
+      log(`${name}: ${basename(url)} pinned in ${target}`);
+      resolve();
+    });
+  });
+
+/**
  * Before `up`: lock the machine's apt packages when its lockfile is missing or was resolved for
  * other packages than it asks for now - a plugin or machine change did that, and there's only
  * one right answer, so `up` shouldn't stop to ask for it. Nothing to do otherwise.
  */
 export const ensureLocked = async (repo: Repo, name: string, log: Log, onOutput?: Log) => {
   const { meta } = await prepare(repo, name, log, onOutput);
-  if (!meta?.apt || !meta.packages.length) return;
   const target = lockFile(repo, name);
-  if (existsSync(target) && !isLockStale(target, meta)) return;
-  log(`${name}: its apt packages changed since the lockfile - locking them again...`);
-  await lock(repo, name, log, onOutput);
+  if (meta?.isoUrl) {
+    if (existsSync(target) && !isLockStale(target, meta)) return;
+    await lockIso(name, meta.isoUrl, target, log, onOutput);
+  } else {
+    if (!meta?.apt || !meta.packages.length) return;
+    if (existsSync(target) && !isLockStale(target, meta)) return;
+    log(`${name}: its apt packages changed since the lockfile - locking them again...`);
+    await lock(repo, name, log, onOutput);
+  }
   if (invisible(repo, name, target)) {
     throw new VmError(
       `${name}: new ${relative(repo.root, target)} - the flake only sees tracked files: git add it, then up again`,
@@ -96,6 +149,15 @@ export const ensureLocked = async (repo: Repo, name: string, log: Log, onOutput?
  */
 export const lock = async (repo: Repo, name: string, log: Log, onOutput?: Log) => {
   const { meta } = await prepare(repo, name, log, onOutput);
+  if (meta?.isoUrl) {
+    await lockIso(name, meta.isoUrl, lockFile(repo, name), log, onOutput);
+    if (invisible(repo, name, lockFile(repo, name))) {
+      log(
+        `the flake only sees tracked files: git add ${relative(repo.root, lockFile(repo, name))}`,
+      );
+    }
+    return;
+  }
   if (!meta?.packages.length) {
     log(`${name} installs no apt packages - nothing to lock`);
     return;

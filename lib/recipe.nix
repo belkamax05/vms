@@ -49,8 +49,11 @@ in
   imports = [ osEntry.base ] ++ desktopModules ++ map moduleOf (close ((recipe.features or [ ]) ++ builtin))
     ++ lib.optional (recipe ? keyboard) ../plugins/keyboard.nix;
 
-  packages = map
-    (name: lib.attrByPath (lib.splitString "." name) (throw "recipe: nixpkgs has no '${name}'") pkgs)
-    (recipe.tools or [ ]);
+  packages =
+    if (osEntry.tools or true) == false && (recipe.tools or [ ]) != [ ]
+    then throw "recipe: ${osEntry.label} has no nixpkgs tools - leave them out"
+    else map
+      (name: lib.attrByPath (lib.splitString "." name) (throw "recipe: nixpkgs has no '${name}'") pkgs)
+      (recipe.tools or [ ]);
 } // size "cpus" // size "memory" // size "diskSize"
   // lib.optionalAttrs (recipe ? keyboard) { keyboard.layout = recipe.keyboard; }

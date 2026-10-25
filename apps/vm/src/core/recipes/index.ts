@@ -38,8 +38,11 @@ export interface CatalogFeature {
 
 /** The repo's catalog as data (`lib.info`, lib/catalog.nix): what a recipe can be made of. */
 export interface Catalog {
-  /** `family` (ubuntu, nixos) is what features' `os`/`requiresOn` and desktops' `os` name. */
-  os: Record<string, { label: string; family?: string }>;
+  /**
+   * `family` (ubuntu, nixos) is what features' `os`/`requiresOn` and desktops' `os` name.
+   * `tools: false`: no nixpkgs tools there (Windows).
+   */
+  os: Record<string, { label: string; family?: string; tools?: boolean }>;
   desktops: Record<string, { label: string; os: string[]; default?: boolean }>;
   features: Record<string, CatalogFeature>;
   /** Suggested nixpkgs names, by group. */
@@ -55,6 +58,13 @@ export interface Catalog {
 
 /** Ubuntu for every Ubuntu release: what features and desktops say they run on. */
 export const familyOf = (catalog: Catalog, os: string) => catalog.os[os]?.family ?? os;
+
+/** The OS takes nixpkgs tools - all but those the catalog says don't (Windows). */
+export const hasTools = (catalog: Catalog, os: string) => catalog.os[os]?.tools !== false;
+
+/** Some desktop in the catalog runs on the OS - otherwise there's none to pick. */
+export const hasDesktops = (catalog: Catalog, os: string) =>
+  Object.values(catalog.desktops).some((desktop) => desktop.os.includes(familyOf(catalog, os)));
 
 /** The tool groups, in the catalog's `toolOrder`. */
 export const toolGroups = (catalog: Catalog): [string, string[]][] => {
@@ -225,6 +235,10 @@ export const recipeProblems = (catalog: Catalog, recipe: Recipe): string[] => {
     problems.push(`unknown keyboard layout '${recipe.keyboard}'`);
   else if (desktop && !desktop.os.includes(familyOf(catalog, recipe.os)))
     problems.push(`${desktop.label} doesn't run on ${recipe.os}`);
+  if (recipe.tools?.length && !hasTools(catalog, recipe.os))
+    problems.push(
+      `${catalog.os[recipe.os]?.label ?? recipe.os} has no nixpkgs tools - leave them out`,
+    );
   for (const id of resolveFeatures(catalog, recipe).on) {
     const why = unavailable(catalog, recipe, id);
     if (why) problems.push(`${catalog.features[id]?.label ?? id}: ${why}`);
@@ -240,7 +254,12 @@ export const blankRecipe = (catalog: Catalog): Recipe => {
     d.os.includes(familyOf(catalog, os)),
   );
   const desktop = (fits.find(([, d]) => d.default) ?? fits[0])?.[0] ?? null;
-  const recipe: Recipe = { os, desktop, features: [], tools: [...catalog.defaultTools] };
+  const recipe: Recipe = {
+    os,
+    desktop,
+    features: [],
+    tools: hasTools(catalog, os) ? [...catalog.defaultTools] : [],
+  };
   recipe.features = Object.entries(catalog.features)
     .filter(([id, feature]) => feature.default && !unavailable(catalog, recipe, id))
     .map(([id]) => id);

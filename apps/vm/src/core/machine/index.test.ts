@@ -19,7 +19,19 @@ test('readMeta reads the runner meta lib/default.nix writes, shell quoting and a
     // A build from before the apt flag: Ubuntu was the one apt guest.
     apt: true,
     packages: ['ubuntu-desktop-minimal', 'dconf-cli', 'git'],
+    // ...and from before boot_timeout: the 5 minutes `vm ssh` always waited.
+    bootTimeout: 300,
   });
+});
+
+test('readMeta: boot_timeout, how long a first boot may take', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vm-meta-'));
+  mkdirSync(join(dir, 'runner'));
+  writeFileSync(
+    join(dir, 'runner', 'meta'),
+    "os=windows\nuser=maksym\ngui=true\napt=false\nboot_timeout=3600\npackages=''\n",
+  );
+  expect(readMeta(dir)?.bootTimeout).toBe(3600);
 });
 
 test('readMeta: the apt flag, for any apt guest', () => {

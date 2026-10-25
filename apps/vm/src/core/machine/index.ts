@@ -17,6 +17,7 @@ import { homedir, hostname } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import { VmError } from '../errors';
+import { byLine, nixLogReader } from '../progress';
 import { accountName, addKey, authorize, checkAccess, GhAccessError, removeKey } from '../github';
 import {
   extraSources,
@@ -50,6 +51,10 @@ export interface Meta {
   packages: string[];
   /** The GitHub account vm-ssh goes on (`github.user`); gh's active one when unset. */
   githubUser?: string;
+  /** Seconds SSH may take to answer - a first boot's provisioning (`bootTimeout`). */
+  bootTimeout: number;
+  /** The ISO it installs from (Windows): `vm lock` downloads it once and pins its hash. */
+  isoUrl?: string;
 }
 
 export type MachineState = 'running' | 'stopped' | 'absent';
@@ -100,6 +105,9 @@ export const readMeta = (dir: string): Meta | undefined => {
     apt: values.apt ? values.apt === 'true' : values.os === 'ubuntu',
     packages: (values.packages ?? '').split(/\s+/).filter(Boolean),
     githubUser: values.github_user || undefined,
+    // Builds from before the field waited 5 minutes.
+    bootTimeout: Number(values.boot_timeout) || 300,
+    isoUrl: values.iso_url || undefined,
   };
 };
 
@@ -163,9 +171,20 @@ const KEY_FILES = new Set([
 const hasState = (dir: string) =>
   existsSync(dir) && readdirSync(dir).some((file) => !KEY_FILES.has(file));
 
-/** lib/ubuntu.nix's own check, so the dashboard says it before `up` fails on it. */
+/**
+ * The builders' own check (lib/cloud.nix, lib/windows.nix), so the dashboard says it before
+ * `up` fails on it: locked for other apt packages, or for another ISO.
+ */
 export const isLockStale = (path: string, meta: Meta | undefined) => {
-  if (!meta?.packages.length || !existsSync(path)) return false;
+  if (!existsSync(path)) return false;
+  if (meta?.isoUrl) {
+    try {
+      return JSON.parse(readFileSync(path, 'utf8')).url !== meta.isoUrl;
+    } catch {
+      return true;
+    }
+  }
+  if (!meta?.packages.length) return false;
   try {
     const locked: string[] = JSON.parse(readFileSync(path, 'utf8')).packages ?? [];
     const sorted = (list: string[]) => [...new Set(list)].sort().join(' ');
@@ -372,23 +391,27 @@ const buildOnce = (repo: Repo, name: string, onOutput?: Log) =>
       else reject(new VmError(`building ${name} failed - see above`));
       return;
     }
-    const child = spawn('nix', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // Nix's JSON log: no bar of its own off a terminal, so the status line draws one (core/progress).
+    const child = spawn('nix', [...args, '--log-format', 'internal-json'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     const tail: string[] = [];
-    const take = (chunk: Buffer) => {
-      for (const line of chunk.toString().split(/\r?\n/)) {
-        const text = line.trim();
-        if (!text) continue;
-        tail.push(text);
-        if (tail.length > 5) tail.shift();
-        onOutput(text);
-      }
-    };
-    child.stdout.on('data', take);
-    child.stderr.on('data', take);
+    const read = nixLogReader((text) => {
+      tail.push(text);
+      if (tail.length > 5) tail.shift();
+      onOutput(text);
+    }, onOutput);
+    const stdout = byLine(read);
+    const stderr = byLine(read);
+    child.stdout.on('data', stdout);
+    child.stderr.on('data', stderr);
     child.on('error', (error) => reject(new VmError(`nix: ${error.message}`)));
-    child.on('close', (code) =>
-      code === 0 ? resolve() : reject(new VmError(`building ${name} failed: ${tail.join(' / ')}`)),
-    );
+    child.on('close', (code) => {
+      stdout();
+      stderr();
+      if (code === 0) resolve();
+      else reject(new VmError(`building ${name} failed: ${tail.join(' / ')}`));
+    });
   });
 
 /** The environment `bin/vm-run` reads - see lib/default.nix. */
@@ -516,9 +539,16 @@ export const sshOptions = (dir: string) => [
 
 /**
  * Retry while the guest is still booting (sshd not up yet, or on Ubuntu, cloud-init not done
- * creating the user) - up to 5 minutes, giving up early once QEMU is gone.
+ * creating the user; on Windows, its whole install) - up to `seconds` (the machine's
+ * `bootTimeout`), giving up early once QEMU is gone.
  */
-export const waitSsh = async (label: string, dir: string, user: string, log: Log) => {
+export const waitSsh = async (
+  label: string,
+  dir: string,
+  user: string,
+  log: Log,
+  seconds = 300,
+) => {
   for (let tries = 1; ; tries += 1) {
     const probe: SpawnSyncReturns<Buffer> = spawnSync(
       'ssh',
@@ -526,8 +556,10 @@ export const waitSsh = async (label: string, dir: string, user: string, log: Log
       { stdio: 'ignore' },
     );
     if (probe.status === 0) return;
-    if (tries >= 60) {
-      throw new VmError(`no SSH after 5 minutes - see ${dir}/console.log, or vm up without -d`);
+    if (tries * 5 >= seconds) {
+      throw new VmError(
+        `no SSH after ${Math.round(seconds / 60)} minutes - see ${dir}/console.log, or vm up without -d`,
+      );
     }
     if (tries === 1) log(`waiting for ${label} to come up...`);
     if (!pidIn(dir)) throw new VmError(`${label} stopped while waiting`);
@@ -546,7 +578,7 @@ const runningMeta = (name: string) => {
 /** `vm ssh <name> [command...]`: in as the machine's user, once it answers. Returns ssh's status. */
 export const ssh = async (name: string, command: string[], log: Log) => {
   const { dir, meta } = runningMeta(name);
-  await waitSsh(name, dir, meta.user, log);
+  await waitSsh(name, dir, meta.user, log, meta.bootTimeout);
   const pending = join(dir, 'vm-ssh.pending');
   if (existsSync(pending) && pushUserKey(name)) {
     rmSync(pending, { force: true });

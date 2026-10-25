@@ -7,8 +7,10 @@
 #                VM_USER_KEY (the machine's own keypair, vm-ssh - private
 #                half, `.pub` beside it - installed as `user`'s
 #                ~/.ssh/id_ed25519 on every boot)
-#   meta         shell-sourceable facts about it (os, user, gui, and the
-#                apt packages `vm lock` resolves - none on NixOS)
+#   meta         shell-sourceable facts about it (os, user, gui, the apt
+#                packages `vm lock` resolves - none on NixOS -, the ISO it
+#                downloads and hashes instead - Windows' -, and how long its
+#                SSH may take to answer on a first boot)
 { nixpkgs, jovian, nixGL }:
 
 let
@@ -97,12 +99,15 @@ rec {
           gui=${lib.boolToString cfg.gui}
           github_user=${lib.escapeShellArg (if cfg.github.user == null then "" else cfg.github.user)}
           apt=${lib.boolToString (aptPackages != null)}
+          boot_timeout=${toString cfg.bootTimeout}
+          iso_url=${lib.escapeShellArg (if cfg.os == "windows" then cfg.windows.iso else "")}
           packages=${lib.escapeShellArg (lib.concatStringsSep " " (lib.unique (if aptPackages == null then [ ] else aptPackages)))}
           EOF
         '';
 
-      # NixOS is built here; everything else boots its distro's cloud image.
-      builder = if cfg.os == "nixos" then ./nixos.nix else ./cloud.nix;
+      # NixOS is built here; Windows installs itself from its ISO (unattended);
+      # everything else boots its distro's cloud image.
+      builder = { nixos = ./nixos.nix; windows = ./windows.nix; }.${cfg.os} or ./cloud.nix;
     in
     import builder { inherit pkgs lib cfg mkRunner lockFile hostRequests nixpkgs; };
 

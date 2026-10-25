@@ -37,6 +37,8 @@
 { pkgs, lib, cfg, mkRunner, lockFile, hostRequests, ... }:
 
 let
+  # Images by Nix's own downloader, so `vm` can show their progress.
+  fetchImage = import ./fetch-image.nix;
   isUbuntu = cfg.os == "ubuntu";
   # The apt guests, whose packages `vm lock` locks .deb by .deb.
   isApt = lib.elem cfg.os [ "ubuntu" "debian" ];
@@ -131,7 +133,7 @@ let
 
   distros = {
     ubuntu = {
-      image = pkgs.fetchurl ubuntuImages.${cfg.ubuntu.release};
+      image = fetchImage ubuntuImages.${cfg.ubuntu.release};
       packages = lib.unique cfg.ubuntu.packages;
       nixPackages = cfg.ubuntu.nixPackages;
       writeFiles = cfg.ubuntu.writeFiles;
@@ -147,7 +149,7 @@ let
     };
 
     arch = {
-      image = pkgs.fetchurl {
+      image = fetchImage {
         url = "https://geo.mirror.pkgbuild.com/images/v20260915.594445/Arch-Linux-x86_64-cloudimg-20260915.594445.qcow2";
         sha256 = "d7cc7c86a21b32d6678c001464714f71f4ef7e0d7bbbfca65e99123ac5afc25b";
       };
@@ -172,7 +174,7 @@ let
     };
 
     debian = {
-      image = pkgs.fetchurl {
+      image = fetchImage {
         url = "https://cloud.debian.org/images/cloud/trixie/20260914-2601/debian-13-genericcloud-amd64-20260914-2601.qcow2";
         sha512 = "95e110dfcdbd0ed8a82a75ed9579802f9950cabf51a810dcc6388e81bc778188713878b9f28d583a0ea602fbf48b35996ae9ad37f584166d8fbd6489df248f53";
       };
@@ -189,7 +191,7 @@ let
     };
 
     fedora = dnfDistro {
-      image = pkgs.fetchurl {
+      image = fetchImage {
         url = "https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2";
         sha256 = "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f";
       };
@@ -197,7 +199,7 @@ let
     };
 
     rocky = dnfDistro {
-      image = pkgs.fetchurl {
+      image = fetchImage {
         url = "https://dl.rockylinux.org/pub/rocky/10.2/images/x86_64/Rocky-10-GenericCloud-Base-10.2-20260525.0.x86_64.qcow2";
         sha256 = "9fc9e9ff16888bb68ac39b0392e25c9c92684d50c85f1cce6ab549363bbc4b48";
       };
@@ -210,7 +212,7 @@ let
     };
 
     alma = dnfDistro {
-      image = pkgs.fetchurl {
+      image = fetchImage {
         url = "https://repo.almalinux.org/almalinux/10.2/cloud/x86_64/images/AlmaLinux-10-GenericCloud-10.2-20260817.0.x86_64.qcow2";
         sha256 = "bc59485c4828861a15887e30ff1bb913f0f16202fd7286208518f4814da1e10a";
       };
@@ -223,7 +225,7 @@ let
     };
 
     opensuse = {
-      image = pkgs.fetchurl {
+      image = fetchImage {
         url = "https://download.opensuse.org/distribution/leap/16.0/appliances/Leap-16.0-Minimal-VM.x86_64-Cloud-Build18.68.qcow2";
         sha256 = "6cd286b06cb065ed65287d3b86cf2676b5972eabe4792c2c841f2a40a33138d6";
       };
@@ -240,7 +242,7 @@ let
     };
 
     alpine = {
-      image = pkgs.fetchurl {
+      image = fetchImage {
         url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/cloud/generic_alpine-3.24.1-x86_64-bios-cloudinit-r0.qcow2";
         sha512 = "8d756f6fc7653daa4fb4e2e213d8a66007bcb1e5a846e28891af62c47b90685c694486c2746099ad99e9e8f5278db76b69d11dfe1e9361aa4c8406df16929a9c";
       };

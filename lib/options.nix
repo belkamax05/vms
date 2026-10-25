@@ -37,7 +37,16 @@ in
     };
 
     os = mkOption {
-      type = types.enum [ "ubuntu" "debian" "fedora" "rocky" "alma" "opensuse" "arch" "alpine" "nixos" ];
+      type = types.enum [ "ubuntu" "debian" "fedora" "rocky" "alma" "opensuse" "arch" "alpine" "nixos" "windows" ];
+    };
+
+    bootTimeout = mkOption {
+      type = types.ints.positive;
+      default = 300;
+      description = ''
+        Seconds `vm ssh` waits for SSH to answer - long enough for a first
+        boot's provisioning. Windows' unattended install sets an hour.
+      '';
     };
 
     cpus = mkOption {
@@ -195,6 +204,50 @@ in
       type = types.listOf types.deferredModule;
       default = [ ];
       description = "NixOS modules added to the guest's system configuration.";
+    };
+
+    # Windows' half (lib/windows.nix): no cloud-init, so what a plugin adds
+    # is files on the setup disc and PowerShell run once at first logon.
+    windows = {
+      iso = mkOption {
+        type = types.str;
+        # Windows 11 Enterprise LTSC 2024 Evaluation (build 26100, 24H2's),
+        # English (US): a fixed file on Microsoft's download server - the one
+        # its evaluation page links to. No product key; it runs 90 days.
+        default = "https://software-static.download.prss.microsoft.com/dbazure/888969d5-f34g-4e03-ac9d-1f9786c66749/26100.1742.240906-0331.ge_release_svc_refresh_CLIENT_LTSC_EVAL_x64FRE_en-us.iso";
+        description = ''
+          Where the ISO comes from - a fixed URL. Its sha256 is the machine's
+          lockfile's: `vm lock` (the first `up` runs it) downloads it once and
+          records it, the way it records Ubuntu's .debs.
+        '';
+      };
+      image = mkOption {
+        type = types.either types.ints.positive types.str;
+        default = 1;
+        description = "The image installed from the ISO: its index, or its name (`/IMAGE/NAME`).";
+      };
+      productKey = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "The key Setup installs with - null for an ISO that asks none, as the evaluation.";
+      };
+      files = mkOption {
+        type = types.attrsOf types.path;
+        default = { };
+        description = ''
+          Files on the setup disc, by name - installers a plugin fetched,
+          pinned. `firstLogon` finds them as "$vms\<name>".
+        '';
+      };
+      firstLogon = mkOption {
+        type = types.listOf types.lines;
+        default = [ ];
+        description = ''
+          PowerShell, run once at the first logon as the (administrator)
+          user, before sshd starts - so `vm ssh` answering means it's done.
+          `$vms` is the setup disc's root.
+        '';
+      };
     };
   };
 }

@@ -31,7 +31,9 @@ the terminal, rendered on your GPU through virgl.
 dev-tools' own giti/porti: the commands above are scripted and never load the
 UI, and `vm` alone opens a dashboard where every action is both a click and a
 hotkey. Booting in the background stays in the dashboard, with nix's build
-output in the status line. ssh, a serial console, `vm lock` and the console log
+output in the status line - and, while an image or ISO downloads, a progress
+bar (`[████░░░░] 42%  2.0 / 4.8 GiB`), read from nix's JSON log. On the
+terminal, nix draws its own. ssh, a serial console, `vm lock` and the console log
 borrow the whole terminal and come back to it after. Its first run does
 `bun install` for the workspace (this repo's apps plus the `@belkamax05/dev-tools` package).
 
@@ -239,6 +241,28 @@ boot finishes what dpkg was doing and runs the install and plugin steps again.
 **NixOS** is built on the host and booted straight from the host's `/nix/store`
 over 9p, so there's no image to build or download. Plugins take effect at build
 time, which makes the first boot as fast as any other.
+
+**Windows 11** (`machines/windows.nix`, `lib/windows.nix`) installs itself from
+Microsoft's ISO, untouched, with an `autounattend.xml` generated from the
+machine's options: a local account without a password, logged straight in,
+none of Setup's or OOBE's questions, and the TPM and Secure Boot checks
+skipped. The ISO is Windows 11 Enterprise LTSC 2024 Evaluation (no product
+key, 90 days - `vm kill` and `up` again after that), from a fixed URL on
+Microsoft's download server (`windows.iso`). Its hash is pinned like Ubuntu's
+.debs: the first `up` runs `vm lock`, which downloads it (5 GB) into the Nix
+store and records its sha256 in `<name>.lock.json`, a file you track; every
+build after that is held to that file and reuses the download.
+
+At the first logon a script from a second disc installs Microsoft's OpenSSH
+(its MSI, pinned - nothing comes from Windows Update), the keys and each
+plugin's `windows.firstLogon` steps, then starts sshd - so `vm ssh` answering
+means it's all done. The keys are installed again on every boot, from a disc
+the runner writes. The install takes 15-30 minutes on the first `up`, and the
+machine's `bootTimeout` gives `vm ssh` an hour for it. It runs on devices
+Windows has drivers for out of the box - no 3D acceleration, unlike the Linux
+desktops. Of the plugins only
+`git` has a Windows half (Git for Windows), and recipes take no nixpkgs tools
+there.
 
 ## State and access
 
