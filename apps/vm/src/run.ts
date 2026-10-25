@@ -127,11 +127,13 @@ export const run = async (...argv: string[]) => {
         const detach = rest[0] === '-d';
         const name = needMachine(repo, detach ? rest[1] : rest[0]);
         await ensureLocked(repo, name, log);
+        // On a terminal, gh can be given what it needs to add vm-ssh right here.
+        const interactive = Boolean(process.stdin.isTTY);
         if (!detach) {
-          process.exitCode = await upAttached(repo, name, log);
+          process.exitCode = await upAttached(repo, name, log, interactive);
           return;
         }
-        const { dir } = await upDetached(repo, name, log);
+        const { dir } = await upDetached(repo, name, log, undefined, log, interactive);
         console.log(`${name} booting in the background - console: ${dir}/console.log`);
         console.log(`vm ssh ${name}   to get in (waits for it to come up)`);
         return;

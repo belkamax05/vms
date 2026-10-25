@@ -2,10 +2,12 @@
 # own vm-ssh key - which GitHub only takes once it's added there, so this
 # can't happen on first boot. Instead, every login runs repos.sh - a desktop
 # login in a window of its own, a console or SSH login in its own terminal:
-# with every repo cloned it exits and nothing opens; otherwise the terminal shows
-# the key to add on GitHub, waits for Space until GitHub accepts it, clones
-# what's missing and closes. A clone refused for SAML SSO waits the same way,
-# for the key to be authorized for that org. Either way the right GitHub page
+# with every repo cloned it exits and nothing opens; otherwise the terminal
+# checks every few seconds until GitHub accepts the key - which `vm` adds at
+# `up` through the host's gh - showing it in case that couldn't happen, clones
+# what's missing and closes. A clone refused - an org's SAML SSO, before the
+# key is authorized for it - opens GitHub's keys page and is retried the same
+# way until it works. Either way the right GitHub page
 # opens in the host's browser (the guest has none), through lib/default.nix's
 # hostRequests, which needs no desktop either.
 #

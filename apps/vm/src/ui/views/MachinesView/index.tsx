@@ -19,6 +19,7 @@ import revealPath from '@/dev-tools/utils/system/revealPath';
 import {
   down,
   exportUserKey,
+  githubAccessProblem,
   importUserKey,
   kill,
   type MachineStatus,
@@ -201,6 +202,17 @@ export const MachinesView = ({
 
   const up = (status: MachineStatus | undefined) => {
     if (!status || busy(status.name) || status.state === 'running') return;
+    // gh can't add vm-ssh to GitHub yet, and only a terminal can ask GitHub's approval for it:
+    // `vm up -d` there asks, adds the key before the guest boots, and comes back here.
+    if (canHandOff && githubAccessProblem(status.name)) {
+      onHandoff({
+        type: 'run',
+        command: vmCommand(['up', '-d', status.name], 'error'),
+        cwd: repo.root,
+        label: `${status.name}: GitHub approval for vm-ssh, then up`,
+      });
+      return;
+    }
     markFailed(status.name, false);
     void act(
       status.name,

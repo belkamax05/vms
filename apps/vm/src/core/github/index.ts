@@ -80,6 +80,29 @@ const api = (account: string | undefined, args: string[]) => {
   throw new VmError(`gh api ${args.join(' ')}: ${said || `exit ${result.status}`}`);
 };
 
+/** Scopes that let a token add and delete SSH keys - `read:public_key` only lists them. */
+const KEY_SCOPES = ['admin:public_key', 'write:public_key'];
+
+/**
+ * Throws GhAccessError unless gh may add and remove `account`'s SSH keys. Listing them proves
+ * nothing (`read:public_key` does that); a classic token's scopes are in X-OAuth-Scopes. A token
+ * that names none there (a fine-grained GH_TOKEN) is taken as it is - adding the key will tell.
+ */
+export const checkAccess = (account?: string) => {
+  const head = api(account, ['-i', 'user']);
+  const line = head.split('\n').find((text) => /^x-oauth-scopes:/i.test(text));
+  if (!line) return;
+  const scopes = line
+    .slice(line.indexOf(':') + 1)
+    .split(',')
+    .map((scope) => scope.trim());
+  if (!scopes.some((scope) => KEY_SCOPES.includes(scope)))
+    throw new GhAccessError(
+      `gh may not add ${whose(account)}'s SSH keys (it needs the admin:public_key scope)`,
+      scopeFix(account),
+    );
+};
+
 /** `ssh-ed25519 AAAA… comment` → `ssh-ed25519 AAAA…`, the form GitHub keeps. */
 const keyText = (pub: string) => pub.trim().split(/\s+/).slice(0, 2).join(' ');
 
@@ -117,7 +140,7 @@ export const removeKey = (pub: string, account?: string): 'removed' | 'absent' =
  */
 export const authorize = (account?: string) => {
   try {
-    findKey(account, 'ssh-ed25519 probe');
+    checkAccess(account);
     return;
   } catch (error) {
     if (!(error instanceof GhAccessError)) throw error;

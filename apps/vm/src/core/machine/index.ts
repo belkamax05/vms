@@ -17,7 +17,7 @@ import { homedir, hostname } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import { VmError } from '../errors';
-import { accountName, addKey, authorize, GhAccessError, removeKey } from '../github';
+import { accountName, addKey, authorize, checkAccess, GhAccessError, removeKey } from '../github';
 import {
   extraSources,
   isImpure,
@@ -459,17 +459,21 @@ export const launchDetached = async (
   }
 };
 
-/** `vm up -d`: build if needed, then boot in the background. */
+/**
+ * `vm up -d`: build if needed, then boot in the background. `interactive`: on a terminal, which
+ * may ask GitHub's approval for adding vm-ssh (registerUserKey).
+ */
 export const upDetached = async (
   repo: Repo,
   name: string,
   log: Log,
   onOutput?: Log,
   warn: Log = log,
+  interactive = false,
 ) => {
   assertStopped(name);
   const { dir, port } = await prepare(repo, name, log, onOutput);
-  registerUserKey(name, log, warn);
+  registerUserKey(name, log, warn, interactive);
   await launchDetached(name, runnerBin(name), dir, runnerEnv(name, dir, port));
   return { dir, port };
 };
@@ -478,10 +482,10 @@ export const upDetached = async (
  * `vm up`: build if needed, then boot attached to this terminal - the serial console, or the
  * machine's own window for a gui one. Returns QEMU's exit status once it powers off.
  */
-export const upAttached = async (repo: Repo, name: string, log: Log) => {
+export const upAttached = async (repo: Repo, name: string, log: Log, interactive = false) => {
   assertStopped(name);
   const { dir, port, meta } = await prepare(repo, name, log);
-  registerUserKey(name, log, log);
+  registerUserKey(name, log, log, interactive);
   if (meta && !meta.gui) {
     log(`Serial console - Ctrl-a x powers the VM off. vm ssh ${name} works from another terminal.`);
   }
@@ -571,14 +575,36 @@ const githubUserOf = (name: string) => readMeta(stateDir(name))?.githubUser;
 const githubOff = () => process.env.VMS_GITHUB === '0';
 
 /**
+ * Why gh can't put `name`'s vm-ssh on GitHub yet - a GhAccessError, whose fix needs GitHub's
+ * approval on a terminal - or undefined when it can (or GitHub is left alone). For the dashboard,
+ * which has no terminal to ask on: it hands `up` to one instead.
+ */
+export const githubAccessProblem = (name: string): GhAccessError | undefined => {
+  if (githubOff()) return undefined;
+  try {
+    checkAccess(githubUserOf(name));
+    return undefined;
+  } catch (error) {
+    if (error instanceof GhAccessError) return error;
+    return undefined;
+  }
+};
+
+/**
  * The machine's vm-ssh on its GitHub account (see core/github), so the guest can clone without
  * anyone adding it by hand - SSO, where an org enforces it, stays a click on GitHub's side. Run
- * on every `up` and whenever the key changes. `warn` gets what went wrong; it never stops `up`.
+ * on every `up` and whenever the key changes. `interactive`: on a terminal, so gh is first given
+ * what it lacks (GitHub's approval in the browser, once) rather than giving up. `warn` gets what
+ * went wrong; it never stops `up`.
  */
-export const registerUserKey = (name: string, log: Log, warn: Log) => {
+export const registerUserKey = (name: string, log: Log, warn: Log, interactive = false) => {
   if (githubOff()) return;
   const account = githubUserOf(name);
   try {
+    if (interactive && githubAccessProblem(name)) {
+      log(`${name}: gh needs GitHub's approval once to add vm-ssh - follow its prompt`);
+      authorize(account);
+    }
     if (addKey(name, readText(join(stateDir(name), 'vm-ssh.pub')), account) === 'added')
       log(`${name}: added vm-ssh to ${accountName(account)}'s GitHub keys`);
   } catch (error) {

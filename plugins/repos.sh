@@ -38,16 +38,14 @@ if ! mkdir "$lock" 2>/dev/null; then
 fi
 trap 'rm -rf "$lock"' EXIT
 
-# One keypress, without Enter.
-key() {
+# Five seconds, or less when a key is pressed - for what gets fixed outside the
+# guest (vm adds the key to GitHub at `up`, SSO is a click on GitHub), so
+# nobody has to press anything here.
+pause() {
   old=$(stty -g)
-  stty -icanon -echo
-  dd bs=1 count=1 2>/dev/null
+  stty -icanon -echo min 0 time 50
+  dd bs=1 count=1 >/dev/null 2>&1
   stty "$old"
-}
-
-wait_space() {
-  until [ "$(key)" = ' ' ]; do :; done
 }
 
 # Open a GitHub page in the host's browser - there's none in the guest. Only
@@ -59,6 +57,7 @@ host_open() {
 
 # GitHub answers `ssh -T` with exit 1 either way; what it says tells them apart.
 asked_key=
+checks=0
 while :; do
   said=$(ssh -T -o BatchMode=yes -o ConnectTimeout=10 git@github.com 2>&1)
   case $said in *'successfully authenticated'*) break ;; esac
@@ -67,58 +66,62 @@ while :; do
   missing | sed 's/^/  /'
   case $said in
     *'Permission denied'*)
-      printf '\nGitHub does not accept this machine'\''s key yet. Add it as vm-ssh at\n'
+      printf '\nGitHub does not accept this machine'\''s key yet. vm adds it when it\n'
+      printf 'boots the machine; if it could not, add it as vm-ssh at\n'
       printf 'https://github.com/settings/ssh/new :\n\n'
       cat "$HOME/.ssh/id_ed25519.pub"
-      # Once, not on every Space: the page is already open after that.
-      if [ -z "$asked_key" ]; then host_open ssh-new && asked_key=1; fi
+      # Not on the first refusal - vm may be adding it right now - and then
+      # once: the page is already open after that.
+      checks=$((checks + 1))
+      if [ -z "$asked_key" ] && [ "$checks" -ge 3 ]; then host_open ssh-new && asked_key=1; fi
       ;;
     *)
       printf '\nCould not reach GitHub:\n  %s\n' "$said"
       ;;
   esac
-  printf '\nPress Space to check again.\n'
-  wait_space
+  printf '\nChecking again every 5 seconds - any key checks now.\n'
+  pause
 done
 
-# A key GitHub accepts can still be refused by an org that enforces SAML SSO:
-# each key needs authorizing for it by hand, and there's no API for that. Such
-# a clone waits here for that click; any other failure ends the run, to be
-# tried again at the next login.
+# A key GitHub accepts can still be refused for a repo: by an org that
+# enforces SAML SSO - each key needs authorizing for it by hand on GitHub,
+# and there's no API for that - or by an account without access. GitHub
+# answers such a clone with "Repository not found" as often as with a SAML
+# message, so every refusal is handled alike: the keys page (Configure SSO)
+# opens in the host's browser, once, and the clone is tried again every few
+# seconds until it works - no key to press, no login to repeat.
 said=$(mktemp)
 status=$(mktemp)
 trap 'rm -rf "$said" "$status" "$lock"' EXIT
-asked_sso=
+asked_keys=
+tries=0
 while list=$(missing) && [ -n "$list" ]; do
-  sso=
-  failed=
+  refused=
+  orgs=
   while read -r url dir; do
     printf '\nCloning %s into ~/%s\n' "$url" "$dir"
     mkdir -p "$HOME/$(dirname "$dir")"
-    # Shown as it runs, and kept to tell SSO apart from other failures.
+    # Shown as it runs.
     { git clone --progress "$url" "$HOME/$dir" 2>&1; echo $? > "$status"; } | tee "$said"
     [ "$(cat "$status")" = 0 ] && continue
-    if grep -q 'SAML SSO' "$said"; then
-      sso="$sso $(printf '%s' "$url" | sed 's|^[^:]*:||; s|/.*||')"
-    else
-      failed="$failed $dir"
-    fi
+    refused="$refused $dir"
+    orgs="$orgs $(printf '%s' "$url" | sed 's|^[^:]*:||; s|/.*||')"
   done <<EOF
 $list
 EOF
+  [ -n "$refused" ] || continue
 
-  if [ -n "$sso" ]; then
-    printf '\nGitHub accepts the key, but these organizations need it authorized for SSO:\n'
-    printf '%s' "$sso" | tr ' ' '\n' | sed '/^$/d' | sort -u | sed 's/^/  /'
-    printf '\nAt https://github.com/settings/keys, press Configure SSO next to vm-ssh and\n'
-    printf 'authorize each of them. Then press Space to try again.\n'
-    if [ -z "$asked_sso" ]; then host_open keys && asked_sso=1; fi
-    wait_space
-  elif [ -n "$failed" ]; then
-    printf '\nFailed:%s - they are tried again at the next login.\nPress Space to close.\n' "$failed"
-    wait_space
-    exit 1
-  fi
+  tries=$((tries + 1))
+  printf '\nGitHub refused:%s\n' "$refused"
+  printf '\nIf an organization enforces SSO, authorize vm-ssh for it: at\n'
+  printf 'https://github.com/settings/keys press Configure SSO next to vm-ssh and\n'
+  printf 'authorize:\n'
+  printf '%s' "$orgs" | tr ' ' '\n' | sed '/^$/d' | sort -u | sed 's/^/  /'
+  printf '\nOtherwise the GitHub account vm-ssh is on has no access to them.\n'
+  if [ -z "$asked_keys" ]; then host_open keys && asked_keys=1; fi
+  printf '\nTrying again every 5 seconds (attempt %s) - any key tries now.\n' "$tries"
+  pause
+  clear
 done
 
 printf '\nAll cloned - closing.\n'
