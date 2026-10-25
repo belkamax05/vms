@@ -25,9 +25,17 @@ let
   # A console or SSH login: the script in that terminal. Only an interactive
   # one - not `ssh host command`, not a desktop's own non-interactive
   # /etc/profile - and it returns at once when there's nothing to clone.
+  # On a machine with a desktop, not the serial console's autologin either:
+  # nobody sees that console, yet the copy there would take the lock and wait
+  # for Space, leaving the desktop's window nothing to do.
   loginHook = exec: ''
     case $- in
-      *i*) [ -t 0 ] && [ -x ${exec} ] && ${exec} --in-terminal ;;
+      *i*)
+        case $(tty) in
+          ${lib.optionalString config.gui "/dev/ttyS* | /dev/hvc*) ;;"}
+          *) [ -t 0 ] && [ -x ${exec} ] && ${exec} --in-terminal ;;
+        esac
+        ;;
     esac
   '';
 

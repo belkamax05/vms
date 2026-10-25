@@ -18,16 +18,24 @@ missing() {
 
 [ -n "$(missing)" ] || exit 0
 
-if [ "${1:-}" != --in-terminal ]; then
+if [ "${1:-}" != --in-terminal ] && [ "${1:-}" != --in-window ]; then
   for term in ptyxis kgx gnome-terminal; do
-    if command -v "$term" >/dev/null; then exec "$term" -- "$0" --in-terminal; fi
+    if command -v "$term" >/dev/null; then exec "$term" -- "$0" --in-window; fi
   done
-  exec x-terminal-emulator -e "$0" --in-terminal
+  exec x-terminal-emulator -e "$0" --in-window
 fi
 
-# One at a time: the desktop's window and a login shell may both start it.
+# One at a time: the desktop's window and a login shell may both start it. A
+# login shell goes on quietly; a window says where the clone is instead of
+# closing empty.
 lock="${TMPDIR:-/tmp}/vms-repos-$(id -u).lock"
-mkdir "$lock" 2>/dev/null || exit 0
+if ! mkdir "$lock" 2>/dev/null; then
+  if [ "${1:-}" = --in-window ]; then
+    printf 'Cloning already runs in another terminal (an SSH login?) - it carries on there.\n'
+    sleep 10
+  fi
+  exit 0
+fi
 trap 'rm -rf "$lock"' EXIT
 
 # One keypress, without Enter.
