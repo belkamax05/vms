@@ -34,9 +34,11 @@
       # recipeMachine and catalogInfo are what `vm` calls: a recipe from
       # anywhere (--impure) built against this repo's catalog, and that
       # catalog as data. An extending repo exposes its own, from its catalog.
+      # mkMachine, mkRecipeMachine and extendCatalogs are also how `vm` builds
+      # the machines of ~/.config/vms/repos.d folders, which have no flake.
       lib = {
         inherit (vmsLib) mkMachine mkMachines mkMachinesCheck mkRecipeMachine mkRecipes;
-        inherit (vmsLib) catalog extendCatalog catalogInfo;
+        inherit (vmsLib) catalog extendCatalog extendCatalogs catalogInfo;
         recipeMachine = vmsLib.mkRecipeMachine vmsLib.catalog;
         info = vmsLib.catalogInfo vmsLib.catalog;
       };

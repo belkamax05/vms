@@ -1,5 +1,3 @@
-import { homedir } from 'node:os';
-
 import { Text, useApp, useInput } from 'ink';
 import { useCallback, useEffect, useState } from 'react';
 
@@ -13,7 +11,7 @@ import { nextThemeId } from '@/dev-tools/ui/theme';
 import type { VmConfig } from '../../config/settings';
 import { machineStatus } from '../../core/machine';
 import { type Catalog, cachedCatalog, fetchCatalog } from '../../core/recipes';
-import { machineNames, type Repo } from '../../core/repo';
+import { extraSources, machineNames, type Repo, tildify } from '../../core/repo';
 import vmTheme from '../theme';
 import type { Handoff, Session, Tone, Work } from '../types';
 import MachinesView from '../views/MachinesView';
@@ -52,11 +50,6 @@ const StatusNote = ({ text, tone }: { text: string; tone: Tone }) => {
       {text}
     </Text>
   );
-};
-
-const tildify = (path: string) => {
-  const home = homedir();
-  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
 };
 
 /**
@@ -182,7 +175,7 @@ export const App = ({
   return (
     <AppShell
       title="vm"
-      detail={`${repo.name} · ${statuses.length} machines · ${running} running · ${tildify(repo.root)}`}
+      detail={`${[repo.name, ...extraSources(repo).map((extra) => extra.name)].join(' + ')} · ${statuses.length} machines · ${running} running · ${tildify(repo.root)}`}
       note={status ? <StatusNote text={status.text} tone={status.tone} /> : undefined}
       tabs={TABS}
       activeTab="machines"

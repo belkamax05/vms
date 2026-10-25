@@ -123,6 +123,7 @@ rec {
   # repo that adds its own entries, and `info` - plain data - for `vm`.
   catalog = catalogLib.catalog;
   extendCatalog = catalogLib.extend;
+  extendCatalogs = catalogLib.extendAll;
   catalogInfo = catalogLib.info;
 
   # A recipe file (JSON, lib/recipe.nix) -> a runner, like mkMachine. `file`

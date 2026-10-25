@@ -135,7 +135,7 @@ that can't work fails with the reason. `vm catalog` lists what's there.
 - `vm new <name>` (or `[n]` in the dashboard, a step-by-step wizard) writes
   one to `~/.config/vms/<repo>/recipes/` - outside the repo, so a new machine
   needs no `git add`; `vm` builds it with `--impure` against the repo's
-  catalog. It starts blank or from any recipe machine, and outlives
+  catalog (and every repos.d folder's, see below). It starts blank or from any recipe machine, and outlives
   `vm kill`; `vm forget` (`[f]`) deletes it.
 
 `VMS_FLAKE=path:$PWD vm ...` makes `vm` read the repo's files as they are,
@@ -173,6 +173,33 @@ machine's own file, so `vm lock` writes that repo's. Its `bin/` gets a shim
 that runs this repo's `bin/vm` with `VMS_REPO` set to itself, and that shim
 gets the same commands and dashboard over its machines. Machine names share
 `~/.local/state/vms/`, so they must be unique across repos.
+
+## Machine folders from elsewhere
+
+Machines that can't be in this public repo, such as a private dotfiles
+layer's work machines, don't need a repo or a flake of their own. Each entry
+in `~/.config/vms/repos.d/` is a folder (or a link to one) laid out like this
+repo, and `vm` lists its machines beside this repo's:
+
+```
+~/.config/vms/repos.d/work -> ~/dev/dotfiles-work/vms
+  recipes/<name>.json        # recipes, lockfiles beside them
+  machines/<name>.nix        # hand-written machines, `{ vms, ... }` as above
+  catalog.nix                # optional: catalog entries, as vms-dfs' catalog.nix
+```
+
+`vm` builds them with `--impure` against this repo's lib, so they need no
+`git add`, and an uncommitted edit counts. Every folder's `catalog.nix` joins
+the catalog (`lib.extendCatalogs`), so `vm new`, `vm catalog` and every
+recipe see its features, the wizard's own recipes included. `vm lock` writes
+lockfiles into the folder, next to the machine. The dashboard and `vm ls` say
+which folder a machine comes from. Two machines with one name, anywhere, stop
+every command until one is renamed. Folders are only read for this repo's own
+`vm`, not under a `VMS_REPO` shim.
+
+They follow this checkout rather than pinning a vms of their own, and
+`nix flake check` doesn't cover them. A link stowed with `--no-folding` works:
+stow links the link itself, so `vm lock` still writes into the real folder.
 
 ## How each OS is built
 

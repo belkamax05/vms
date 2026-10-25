@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { VmError } from '../errors';
-import { flakeRef, nixError, relockPathInputs } from '../machine';
+import { catalogExpr, flakeRef, nixError, relockPathInputs } from '../machine';
 import { machineSource, myRecipesDir, type Repo, stateDir } from '../repo';
 
 /**
@@ -120,7 +120,19 @@ const remember = (repo: Repo, stdout: string) => {
   return catalog;
 };
 
-const EVAL = (repo: Repo) => ['eval', '--json', `${flakeRef(repo)}#lib.info`];
+/** `lib.info`, or - with repos.d folders adding to it - the merged catalog's (catalogExpr). */
+const EVAL = (repo: Repo) => {
+  const catalog = catalogExpr(repo);
+  return catalog
+    ? [
+        'eval',
+        '--json',
+        '--impure',
+        '--expr',
+        `(builtins.getFlake ${JSON.stringify(flakeRef(repo))}).lib.catalogInfo ${catalog}`,
+      ]
+    : ['eval', '--json', `${flakeRef(repo)}#lib.info`];
+};
 const failed = (repo: Repo, stderr: string) =>
   new VmError(`couldn't read ${repo.name}'s catalog: ${nixError(stderr) || 'nix eval failed'}`);
 
@@ -276,7 +288,9 @@ export const forgetRecipe = (repo: Repo, name: string) => {
   const source = machineSource(repo, name);
   if (!source) throw new VmError(`no machine '${name}'`);
   if (source.kind !== 'mine')
-    throw new VmError(`${name} is defined in ${source.path}, in the repo - remove it there`);
+    throw new VmError(
+      `${name} is defined in ${source.path}, in ${source.extra ? `repos.d's ${source.extra.name}` : 'the repo'} - remove it there`,
+    );
   if (existsSync(stateDir(name))) throw new VmError(`${name} still exists - vm kill ${name} first`);
   rmSync(source.path, { force: true });
   rmSync(source.path.replace(/\.json$/, '.lock.json'), { force: true });

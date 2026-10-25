@@ -15,7 +15,7 @@ import {
   VmError,
   waitSsh,
 } from '../machine';
-import { lockFile, machineSource, type Repo, stateDir } from '../repo';
+import { isImpure, lockFile, machineSource, type Repo, stateDir } from '../repo';
 
 const RESOLVE = readFileSync(join(import.meta.dir, 'resolve.sh'), 'utf8');
 
@@ -54,11 +54,11 @@ const snapshotNow = () =>
     .replace(/\.\d+Z$/, 'Z');
 
 /**
- * A lockfile the flake can't see yet: inside the repo but not tracked. A wizard recipe's lives
- * outside it and is read --impure, so it never needs `git add`.
+ * A lockfile the flake can't see yet: inside the repo but not tracked. A wizard recipe's, or a
+ * repos.d folder's machine's, lives outside it and is read --impure, so it never needs `git add`.
  */
 const invisible = (repo: Repo, name: string, path: string) =>
-  machineSource(repo, name)?.kind !== 'mine' && !isTracked(repo, path);
+  !isImpure(machineSource(repo, name)) && !isTracked(repo, path);
 
 const isTracked = (repo: Repo, path: string) =>
   spawnSync('git', ['-C', repo.root, 'ls-files', '--error-unmatch', relative(repo.root, path)], {

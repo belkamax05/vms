@@ -1,7 +1,8 @@
 # What a recipe (lib/recipe.nix) can be made of - the choices `vm new` offers,
 # so machines are picked from parts instead of written one file per combination.
 # A repo that extends this one adds its own entries (vms-dfs' catalog.nix):
-# `extend` merges them in, theirs winning on a clash.
+# `extend` merges them in, theirs winning on a clash; `extendAll` merges a
+# list of them, one after another.
 #
 #   os.<id>        the base machine a recipe starts from; `family` (ubuntu,
 #                  nixos) is what features' `os` and `requiresOn` name, so a
@@ -157,20 +158,28 @@ let
   # Only what `vm` shows: no module or base paths, which would drag the
   # plugins' store paths into a JSON dump.
   strip = lib.mapAttrs (_: entry: removeAttrs entry [ "module" "base" ]);
+
+  # `base` with `extra`'s entries merged in, theirs winning on a clash.
+  extendWith = base: extra: {
+    os = base.os // (extra.os or { });
+    desktops = base.desktops // (extra.desktops or { });
+    features = base.features // (extra.features or { });
+    tools = lib.zipAttrsWith (_: lists: lib.unique (lib.concatLists lists)) [ base.tools (extra.tools or { }) ];
+    keyboards = base.keyboards // (extra.keyboards or { });
+    defaultTools = lib.unique (base.defaultTools ++ (extra.defaultTools or [ ]));
+    toolOrder = lib.unique (base.toolOrder ++ (extra.toolOrder or [ ]));
+    presets = base.presets // (extra.presets or { });
+  };
 in
 {
   inherit catalog;
 
-  extend = extra: {
-    os = catalog.os // (extra.os or { });
-    desktops = catalog.desktops // (extra.desktops or { });
-    features = catalog.features // (extra.features or { });
-    tools = lib.zipAttrsWith (_: lists: lib.unique (lib.concatLists lists)) [ catalog.tools (extra.tools or { }) ];
-    keyboards = catalog.keyboards // (extra.keyboards or { });
-    defaultTools = lib.unique (catalog.defaultTools ++ (extra.defaultTools or [ ]));
-    toolOrder = lib.unique (catalog.toolOrder ++ (extra.toolOrder or [ ]));
-    presets = catalog.presets // (extra.presets or { });
-  };
+  extend = extendWith catalog;
+
+  # Several repos' additions at once, in order - `vm`'s merged catalog of
+  # this repo and every ~/.config/vms/repos.d folder (README, "Machine
+  # folders from elsewhere").
+  extendAll = lib.foldl' extendWith catalog;
 
   info = c: {
     os = strip c.os;

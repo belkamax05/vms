@@ -18,7 +18,15 @@ import { dirname, join, resolve } from 'node:path';
 
 import { VmError } from '../errors';
 import { accountName, addKey, authorize, GhAccessError, removeKey } from '../github';
-import { lockFile, machineSource, type Repo, sharedKey, stateDir } from '../repo';
+import {
+  extraSources,
+  isImpure,
+  lockFile,
+  machineSource,
+  type Repo,
+  sharedKey,
+  stateDir,
+} from '../repo';
 
 export { VmError };
 
@@ -48,6 +56,8 @@ export type MachineState = 'running' | 'stopped' | 'absent';
 
 export interface MachineStatus {
   name: string;
+  /** The repos.d folder it comes from - none for the repo's own and the wizard's. */
+  from?: string;
   /** `stopped`: not running, but its state dir (disk and all) is kept. `absent`: no state. */
   state: MachineState;
   pid?: number;
@@ -173,6 +183,7 @@ export const machineStatus = (repo: Repo, name: string): MachineStatus => {
   const publicKey = readText(join(dir, 'vm-ssh.pub'));
   return {
     name,
+    from: machineSource(repo, name)?.extra?.name,
     state: pid ? 'running' : hasState(dir) ? 'stopped' : 'absent',
     pid,
     sshPort: port > 0 ? port : undefined,
@@ -299,20 +310,41 @@ export const nixError = (stderr: string) => {
   return (error ?? lines.slice(-2).join(' / ')).replace(/^error:\s*/, '');
 };
 
+/** The repo's flake, as a Nix expression - for --impure builds and evals. */
+const flakeExpr = (repo: Repo) => `(builtins.getFlake ${JSON.stringify(flakeRef(repo))})`;
+
+const pathExpr = (path: string) => `(/. + ${JSON.stringify(path)})`;
+
 /**
- * What `nix build` builds for the machine: the repo's own package, or - for a wizard recipe,
- * which lives outside the repo - that recipe against the repo's catalog (`lib.recipeMachine`),
- * which needs --impure to read it.
+ * The catalog `vm new` offers and recipes build against, as a Nix expression: the repo's own,
+ * plus every repos.d folder's catalog.nix (`lib.extendCatalogs`). Undefined when no folder adds
+ * one - the flake's own catalog is all there is.
+ */
+export const catalogExpr = (repo: Repo): string | undefined => {
+  const extras = extraSources(repo)
+    .map((extra) => join(extra.root, 'catalog.nix'))
+    .filter((path) => existsSync(path));
+  if (!extras.length) return undefined;
+  const imports = extras.map((path) => `(import ${pathExpr(path)})`).join(' ');
+  return `(${flakeExpr(repo)}.lib.extendCatalogs [ ${imports} ])`;
+};
+
+/**
+ * What `nix build` builds for the machine: the repo's own package, or - for one outside the repo
+ * (a wizard recipe, a repos.d folder's machine) - its file built with the repo's lib, which needs
+ * --impure to read it. Recipes build against the merged catalog (catalogExpr).
  */
 const buildTarget = (repo: Repo, name: string): string[] => {
   const source = machineSource(repo, name);
-  if (source?.kind !== 'mine') return [`${flakeRef(repo)}#${name}`];
-  const flake = `builtins.getFlake ${JSON.stringify(flakeRef(repo))}`;
-  return [
-    '--impure',
-    '--expr',
-    `(${flake}).lib.recipeMachine ${JSON.stringify(name)} (/. + ${JSON.stringify(source.path)})`,
-  ];
+  if (!source || !isImpure(source)) return [`${flakeRef(repo)}#${name}`];
+  const catalog = catalogExpr(repo);
+  const build =
+    source.kind === 'module'
+      ? `${flakeExpr(repo)}.lib.mkMachine`
+      : catalog
+        ? `${flakeExpr(repo)}.lib.mkRecipeMachine ${catalog}`
+        : `${flakeExpr(repo)}.lib.recipeMachine`;
+  return ['--impure', '--expr', `${build} ${JSON.stringify(name)} ${pathExpr(source.path)}`];
 };
 
 /** `buildOnce`, again after re-locking when the repo's lock was behind its submodule. */

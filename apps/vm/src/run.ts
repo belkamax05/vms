@@ -25,9 +25,10 @@ import {
   saveRecipe,
   unavailable,
 } from './core/recipes';
-import { currentRepo, hasMachine, machineNames, type Repo } from './core/repo';
+import { currentRepo, hasMachine, machineNames, machineSources, type Repo } from './core/repo';
 
-const HELP = `vm - boot, reach and throw away the machines defined in machines/
+const HELP = `vm - boot, reach and throw away the machines defined in machines/ and
+recipes/ - this repo's, and those of every folder in ~/.config/vms/repos.d
 
 usage:
   vm                     open the dashboard
@@ -97,6 +98,8 @@ export const run = async (...argv: string[]) => {
   const [command, ...rest] = argv;
 
   try {
+    // Two machines with one name stop every command, the dashboard too, until one goes.
+    machineSources(repo);
     switch (command) {
       case undefined: {
         const { default: renderDashboard } = await import('./ui/renderDashboard');
@@ -115,7 +118,9 @@ export const run = async (...argv: string[]) => {
         if (rest.includes('--json')) console.log(JSON.stringify(statuses, null, 2));
         else
           for (const status of statuses)
-            console.log(`${status.name.padEnd(14)} ${describeStatus(status)}`);
+            console.log(
+              `${status.name.padEnd(14)} ${describeStatus(status)}${status.from ? `  (${status.from})` : ''}`,
+            );
         return;
       }
       case 'up': {

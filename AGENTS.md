@@ -23,12 +23,18 @@ action. The user stages and commits everything themselves. See
 - **Every machine produces the same runner shape** (`bin/vm-run` + `meta`,
   see `lib/default.nix`). `vm` (`apps/vm`) must never branch on the OS
   beyond hiding an action that can't apply (`Lock` on NixOS).
-- **Other repos extend this one; keep that API whole.** `flake.nix`'s `lib`
-  (`mkMachines`, `mkMachinesCheck`), the `vms` module argument (this repo's
-  root, for importing its machines/plugins), lockfiles next to the machine's
-  own file, and `VMS_REPO` for `vm` are what `~/dfs/vms-dfs` is built on.
+- **Other repos and folders extend this one; keep that API whole.**
+  `flake.nix`'s `lib` (`mkMachines`, `mkMachinesCheck`, and `mkMachine`,
+  `mkRecipeMachine`, `extendCatalogs` for repos.d folders), the `vms` module
+  argument (this repo's root, for importing its machines/plugins), lockfiles
+  next to the machine's own file, `VMS_REPO` for `vm`, and
+  `~/.config/vms/repos.d/` folders (machines/, recipes/, catalog.nix, no
+  flake) are what `~/dfs/vms-dfs` and private dotfiles layers are built on.
   Nothing may assume machines live in this repo's `machines/`. Plugins, all
-  of them, live here, never in an extending repo.
+  of them, live here, never in an extending repo or folder. Its
+  `catalog.nix` may add features whose module only sets options of plugins
+  here (vms-dfs' `dfs-repos`, a `repos` list), since that data can be
+  private.
 - **All of a machine's host state lives in `~/.local/state/vms/<name>/`**,
   so that `vm kill` removes it with a single `rm -rf`. Nothing may write
   outside it, except the shared `id_ed25519` keypair next to it.
@@ -46,7 +52,8 @@ action. The user stages and commits everything themselves. See
   `vm up -d <name> && vm ssh <name> ... && vm kill <name>`.
 - **The flake only sees tracked files once this is a git repo.** A new
   `machines/`/`plugins/` file is invisible to `vm up` until it is
-  `git add`ed. The user does that, not the agent.
+  `git add`ed. The user does that, not the agent. (repos.d folders and
+  wizard recipes are read `--impure` and need no `git add`.)
 - **Host tooling belongs to the repo, not the guests.** `vm` is a Bun app
   on dev-tools (the `@belkamax05/dev-tools` package, from GitHub) and
   follows dev-tools' app conventions: `src/run.ts` for scripted commands,

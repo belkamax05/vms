@@ -1,5 +1,4 @@
 import { existsSync } from 'node:fs';
-import { relative } from 'node:path';
 
 import { Text, useInput } from 'ink';
 import type { Dispatch, SetStateAction } from 'react';
@@ -29,7 +28,15 @@ import {
 } from '../../../core/machine';
 import { ensureLocked } from '../../../core/lock';
 import { forgetRecipe } from '../../../core/recipes';
-import { lockFile, machineFile, machineSource, type Repo, VM_BIN } from '../../../core/repo';
+import {
+  displayPath,
+  lockFile,
+  machineFile,
+  machineSource,
+  type Repo,
+  tildify,
+  VM_BIN,
+} from '../../../core/repo';
 import copyToClipboard from '../../clipboard';
 import type { Handoff, Session, Tone, Work } from '../../types';
 
@@ -152,7 +159,7 @@ export const MachinesView = ({
 
   const items: PickItem<MachineStatus>[] = statuses.map((status) => ({
     id: status.name,
-    label: `${working[status.name] === 'booting' ? spinner : MARK[status.state]} ${status.name}`,
+    label: `${working[status.name] === 'booting' ? spinner : MARK[status.state]} ${status.name}${status.from ? ` · ${status.from}` : ''}`,
     hint: working[status.name]
       ? `${working[status.name]}…`
       : status.state === 'running'
@@ -492,6 +499,7 @@ export const MachinesView = ({
           if (!status) return null;
           const meta = status.meta;
           const lockPath = lockFile(repo, status.name);
+          const extra = machineSource(repo, status.name)?.extra;
           const failed = failedUp.has(status.name);
           return (
             <Box flexDirection="column" flexGrow={1} overflow="hidden">
@@ -541,15 +549,22 @@ export const MachinesView = ({
               )}
               {/* Every path opens: files in their default app, the state dir in the file manager. */}
               <Box flexDirection="column" marginTop={1}>
+                {extra && (
+                  <LinkRow
+                    label="from"
+                    value={`${extra.name} · ${tildify(extra.root)}`}
+                    onOpen={() => revealPath(extra.root)}
+                  />
+                )}
                 <LinkRow
                   label="machine"
-                  value={relative(repo.root, machineFile(repo, status.name))}
+                  value={displayPath(repo, machineFile(repo, status.name))}
                   onOpen={() => openUrl(machineFile(repo, status.name))}
                 />
                 {status.hasLockFile && (
                   <LinkRow
                     label="lock"
-                    value={relative(repo.root, lockPath)}
+                    value={displayPath(repo, lockPath)}
                     onOpen={() => openUrl(lockPath)}
                   />
                 )}

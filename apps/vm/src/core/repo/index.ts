@@ -1,6 +1,8 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
+
+import { VmError } from '../errors';
 
 /** This repo's root - apps/vm/src/core/repo, five levels down. Holds `bin/vm`. */
 export const VMS_ROOT = resolve(import.meta.dir, '../../../../..');
@@ -36,19 +38,60 @@ export const recipesDir = (repo: Repo) => join(repo.root, 'recipes');
  * `git add` - `vm` builds them with --impure against the repo's catalog. They outlive `vm kill`;
  * `vm forget` deletes one.
  */
-export const myRecipesDir = (repo: Repo) =>
-  join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'vms', repo.name, 'recipes');
+const configHome = () => process.env.XDG_CONFIG_HOME || join(homedir(), '.config');
+
+export const myRecipesDir = (repo: Repo) => join(configHome(), 'vms', repo.name, 'recipes');
 
 /**
- * Where a machine is defined: a hand-written module (machines/<name>.nix), a recipe in the repo
- * (recipes/<name>.json) or one of the wizard's (myRecipesDir). One name, one definition - on a
- * clash the first of those wins.
+ * A folder of machines from outside this repo - a private dotfiles layer's - laid out like it
+ * (machines/, recipes/, an optional catalog.nix of additions to the catalog) but with no flake:
+ * `vm` builds its machines with --impure against this repo, and its catalog.nix joins the one
+ * `vm new` offers. `name` is its repos.d entry's.
+ */
+export interface ExtraSource {
+  name: string;
+  root: string;
+}
+
+/** Each entry is such a folder, or a link to one - one per dotfiles layer, none editing another's. */
+export const sourcesDir = () => join(configHome(), 'vms', 'repos.d');
+
+/**
+ * The repos.d folders, by name. Only for this repo: a VMS_REPO of another has a flake of its own,
+ * with its own catalog and `lib` - these build against this one's.
+ */
+export const extraSources = (repo: Repo): ExtraSource[] => {
+  const dir = sourcesDir();
+  if (repo.root !== VMS_ROOT || !existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => !name.startsWith('.'))
+    .sort()
+    .flatMap((name) => {
+      try {
+        const root = realpathSync(join(dir, name));
+        return statSync(root).isDirectory() ? [{ name, root }] : [];
+      } catch {
+        // A link to a folder that isn't there (a layer not cloned yet): no machines from it.
+        return [];
+      }
+    });
+};
+
+/**
+ * Where a machine is defined: a hand-written module (machines/<name>.nix), a recipe
+ * (recipes/<name>.json) - in the repo, or in a repos.d folder (`extra`) - or one of the wizard's
+ * (myRecipesDir). One name, one definition: they share `stateDir`, so a clash is an error.
  */
 export interface MachineSource {
   name: string;
   kind: 'module' | 'recipe' | 'mine';
   path: string;
+  extra?: ExtraSource;
 }
+
+/** Read from disk as it is (--impure), not through a flake: no `git add` for its files. */
+export const isImpure = (source: MachineSource | undefined) =>
+  source?.kind === 'mine' || Boolean(source?.extra);
 
 const listDir = (dir: string, suffix: string) =>
   existsSync(dir)
@@ -57,21 +100,33 @@ const listDir = (dir: string, suffix: string) =>
         .map((file) => ({ name: file.slice(0, -suffix.length), path: join(dir, file) }))
     : [];
 
+/** A folder of machine files: their kind, the folder, their suffix, the repos.d folder it's in. */
+type SourceDir = [MachineSource['kind'], string, string, ExtraSource?];
+
+/** Throws on two machines with one name, saying where both are. */
 export const machineSources = (repo: Repo): MachineSource[] => {
-  const seen = new Set<string>();
-  const sources: MachineSource[] = [];
-  for (const [kind, dir, suffix] of [
+  const seen = new Map<string, MachineSource>();
+  const extraDirs = (extra: ExtraSource): SourceDir[] => [
+    ['module', join(extra.root, 'machines'), '.nix', extra],
+    ['recipe', join(extra.root, 'recipes'), '.json', extra],
+  ];
+  const dirs: SourceDir[] = [
     ['module', machinesDir(repo), '.nix'],
     ['recipe', recipesDir(repo), '.json'],
+    ...extraSources(repo).flatMap(extraDirs),
     ['mine', myRecipesDir(repo), '.json'],
-  ] as const) {
+  ];
+  for (const [kind, dir, suffix, extra] of dirs) {
     for (const entry of listDir(dir, suffix)) {
-      if (seen.has(entry.name)) continue;
-      seen.add(entry.name);
-      sources.push({ ...entry, kind });
+      const first = seen.get(entry.name);
+      if (first)
+        throw new VmError(
+          `two machines are called ${entry.name}: ${displayPath(repo, first.path)} and ${displayPath(repo, entry.path)} - rename or remove one`,
+        );
+      seen.set(entry.name, { ...entry, kind, ...(extra && { extra }) });
     }
   }
-  return sources.sort((a, b) => a.name.localeCompare(b.name));
+  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
 };
 
 export const machineSource = (repo: Repo, name: string) =>
@@ -90,6 +145,18 @@ export const machineNames = (repo: Repo): string[] =>
   machineSources(repo).map((source) => source.name);
 
 export const hasMachine = (repo: Repo, name: string) => Boolean(machineSource(repo, name));
+
+/** `~/...` for a home path. */
+export const tildify = (path: string) => {
+  const home = homedir();
+  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+};
+
+/** A path as the user reads it: relative inside the repo, from ~ outside it (a repos.d folder). */
+export const displayPath = (repo: Repo, path: string) => {
+  const inRepo = relative(repo.root, path);
+  return inRepo.startsWith('..') ? tildify(path) : inRepo;
+};
 
 /**
  * Every machine's host state - disk overlay, seed, SSH port, console log, its vm-ssh key and a
