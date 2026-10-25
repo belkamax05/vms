@@ -69,10 +69,9 @@ dashboard (they always could from two terminals).
 
 ## 6. Cloud sessions / tooling
 
-- [ ] `.gitmodules` points `libs/dev-tools` at `git@github.com:...`; a cloud session can't fetch
-      that and needs `git -c url."https://github.com/".insteadOf="git@github.com:" submodule
-      update --init`. Consider a SessionStart hook that does that plus `bun install`, so
-      `bun run typecheck` works out of the box.
+- [x] ~~`.gitmodules` points `libs/dev-tools` at `git@github.com:...`; a cloud session can't fetch
+      that.~~ The submodule is gone: dev-tools is the `github:belkamax05/dev-tools` package, which
+      Bun fetches over HTTPS, so a plain `bun install` is enough.
 - [ ] The cloud container's Bun rewrites `bun.lock` on `bun install` (lockfileVersion 2 → 1,
       biome 2.5.14 → 2.5.15). Pin the Bun version (e.g. `packageManager` in `package.json`) so
       sessions don't produce lockfile churn.

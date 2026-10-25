@@ -48,7 +48,7 @@ action. The user stages and commits everything themselves. See
   `machines/`/`plugins/` file is invisible to `vm up` until it is
   `git add`ed. The user does that, not the agent.
 - **Host tooling belongs to the repo, not the guests.** `vm` is a Bun app
-  on dev-tools (the `libs/dev-tools` submodule, a Bun workspace member) and
+  on dev-tools (the `@belkamax05/dev-tools` package, from GitHub) and
   follows dev-tools' app conventions: `src/run.ts` for scripted commands,
   lazily importing the dashboard, and every dashboard action reachable by
   click and hotkey. Nothing from it is ever installed into a VM.

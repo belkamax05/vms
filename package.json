@@ -3,14 +3,17 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "libs/dev-tools",
     "apps/*"
   ],
   "scripts": {
     "test": "bun test ./apps",
     "typecheck": "cd apps/vm && bunx tsc --noEmit",
     "lint": "bun biome check .",
-    "format": "bun biome check --write --unsafe ."
+    "format": "bun biome check --write --unsafe .",
+    "update": "bun update @belkamax05/dev-tools"
+  },
+  "dependencies": {
+    "@belkamax05/dev-tools": "github:belkamax05/dev-tools"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.10",

@@ -1,3 +1,0 @@
-[submodule "libs/dev-tools"]
-	path = libs/dev-tools
-	url = git@github.com:belkamax05/dev-tools.git

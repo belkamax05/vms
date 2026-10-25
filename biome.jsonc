@@ -1,5 +1,5 @@
 {
-  // The same formatting as dev-tools' apps (libs/dev-tools/apps/*/biome.jsonc).
+  // The same formatting as dev-tools' apps (its apps/*/biome.jsonc).
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {

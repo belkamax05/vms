@@ -10,14 +10,14 @@ set -eu
 
 _root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
-if [ ! -f "$_root/libs/dev-tools/package.json" ]; then
-    printf 'vm: libs/dev-tools (a submodule) is missing - run:\n  git -C %s submodule update --init\n' "$_root" >&2
-    exit 1
-fi
-# First run, or after a fresh clone: the Bun workspace (this repo's apps +
-# libs/dev-tools) isn't installed yet.
-if [ ! -d "$_root/node_modules" ]; then
-    (cd "$_root" && bun install >&2)
+# First run, after a fresh clone, or from the submodule days: the Bun
+# workspace (this repo's apps + the @belkamax05/dev-tools package) isn't
+# installed yet.
+if [ ! -f "$_root/node_modules/@belkamax05/dev-tools/package.json" ]; then
+    (cd "$_root" && bun install >&2) || {
+        echo 'vm: bun install failed - @belkamax05/dev-tools comes from GitHub' >&2
+        exit 1
+    }
 fi
 
 exec bun "$_root/apps/vm/src/main.ts" "$@"

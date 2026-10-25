@@ -19,11 +19,11 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
 
-    // dev-tools is the submodule at libs/dev-tools, a member of this repo's
-    // Bun workspace (../../package.json) - which is what makes its react and
-    // ink the same copy as ours, so its components can be rendered here.
+    // dev-tools is the @belkamax05/dev-tools package (../../package.json),
+    // installed from GitHub with the same react/ink ranges as ours - which
+    // makes them one copy, so its components can be rendered here.
     "paths": {
-      "@/dev-tools/*": ["../../libs/dev-tools/libs/*"]
+      "@/dev-tools/*": ["../../node_modules/@belkamax05/dev-tools/libs/*"]
     }
   }
 }

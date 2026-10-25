@@ -33,7 +33,7 @@ UI, and `vm` alone opens a dashboard where every action is both a click and a
 hotkey. Booting in the background stays in the dashboard, with nix's build
 output in the status line. ssh, a serial console, `vm lock` and the console log
 borrow the whole terminal and come back to it after. Its first run does
-`bun install` for the workspace (this repo's apps plus `libs/dev-tools`).
+`bun install` for the workspace (this repo's apps plus the `@belkamax05/dev-tools` package).
 
 ## Layout
 
@@ -42,8 +42,8 @@ recipes/          machines as JSON recipes (see below), lockfiles beside them
 bin/vm            the host command (a shim for apps/vm); mr's link_bins puts it on PATH
 apps/vm/          the command itself: src/run.ts (scripted commands),
                   src/core (machines, lock), src/ui (the dashboard)
-libs/dev-tools/   git submodule - the terminal-UI kit, a member of this
-                  repo's Bun workspace (package.json)
+package.json      the Bun workspace (apps/*) plus @belkamax05/dev-tools,
+                  the terminal-UI kit, from GitHub (`bun run update`)
 flake.nix         machines/* -> packages.<name>; `lib` for repos that extend
                   this one; `nix flake check`
 machines/         one file per machine, auto-discovered - no registry
