@@ -47,12 +47,7 @@ let
       opensuse = { label = "openSUSE Leap 16.0"; family = "opensuse"; base = ../machines/opensuse.nix; };
       arch = { label = "Arch Linux"; family = "arch"; base = ../machines/arch.nix; };
       alpine = { label = "Alpine 3.24"; family = "alpine"; base = ../machines/alpine.nix; };
-      nixos = { label = "NixOS 26.05"; family = "nixos"; base = ../machines/nixos.nix; };
-      nixos-unstable = {
-        label = "NixOS unstable";
-        family = "nixos";
-        base = { imports = [ ../machines/nixos.nix ]; nixos.channel = "unstable"; };
-      };
+      nixos = { label = "NixOS unstable"; family = "nixos"; base = ../machines/nixos.nix; };
     };
 
     desktops = {

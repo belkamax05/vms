@@ -91,10 +91,11 @@ stubs, the graphical target) and adds only its packages, autologin and
 lock-screen-off settings - no lock screen anywhere, since the user has no
 password.
 
-Two options pick a release: `ubuntu.release` ("26.04", or "24.04" LTS - each a
-pinned cloud image in `lib/ubuntu.nix`) and `nixos.channel` ("stable", or
-"unstable" - `nixpkgs-unstable`, pinned in `flake.lock`). The catalog offers
-them as OSes of their own (`ubuntu-lts`, `nixos-unstable`).
+`ubuntu.release` picks Ubuntu's ("26.04", or "24.04" LTS - each a pinned
+cloud image in `lib/ubuntu.nix`); the catalog offers the LTS as an OS of its
+own (`ubuntu-lts`). Everything from nixpkgs - NixOS guests, and every tool a
+machine installs from it on any OS - comes from one nixos-unstable, as
+`~/dotfiles` uses, pinned in `flake.lock`: `nix flake update nixpkgs` moves it.
 
 The builder for the machine's own OS reads only its half. That lets one plugin
 file (see `plugins/gui.nix`) serve both OSes, and a machine can import any mix of

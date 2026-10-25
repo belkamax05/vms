@@ -191,16 +191,6 @@ in
       };
     };
 
-    nixos.channel = mkOption {
-      type = types.enum [ "stable" "unstable" ];
-      default = "stable";
-      description = ''
-        Which nixpkgs the NixOS system is built from: this repo's pinned
-        release (stable) or its pinned nixos-unstable. Tools (`packages`)
-        come from the release either way.
-      '';
-    };
-
     nixos.modules = mkOption {
       type = types.listOf types.deferredModule;
       default = [ ];

@@ -2,17 +2,15 @@
   description = "Throwaway VMs - raw Ubuntu / NixOS guests, optional plugins on top";
 
   inputs = {
-    # Same release as ~/dotfiles' pins, so the NixOS guests and the host's
-    # own profile share one binary cache's worth of store paths.
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
-    # For NixOS machines with `nixos.channel = "unstable"` only - pinned in
-    # flake.lock like everything else, and fetched only when one is built.
-    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # Steam's gaming mode for NixOS (plugins/steam.nix), on the unstable
-    # nixpkgs it follows - fetched only when a machine uses it.
+    # nixos-unstable, as ~/dotfiles' own nixpkgs: current tools (bun, ...) in
+    # every guest, and NixOS guests sharing store paths with the host's
+    # profile. Pinned in flake.lock - `nix flake update nixpkgs` moves it.
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Steam's gaming mode for NixOS (plugins/steam.nix), on the same nixpkgs -
+    # fetched only when a machine uses it.
     jovian = {
       url = "github:Jovian-Experiments/Jovian-NixOS";
-      inputs.nixpkgs.follows = "nixpkgs-unstable";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
     nixGL = {
       url = "github:nix-community/nixGL";
@@ -20,10 +18,10 @@
     };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-unstable, jovian, nixGL }:
+  outputs = { self, nixpkgs, jovian, nixGL }:
     let
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      vmsLib = import ./lib { inherit nixpkgs nixpkgs-unstable jovian nixGL; };
+      vmsLib = import ./lib { inherit nixpkgs jovian nixGL; };
       machines = vmsLib.mkMachines ./machines // vmsLib.mkRecipes vmsLib.catalog ./recipes;
     in
     {
