@@ -16,9 +16,9 @@
     "@belkamax05/dev-tools": "github:belkamax05/dev-tools"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.10",
+    "@biomejs/biome": "^2.6.3",
     "@types/bun": "latest",
-    "@types/react": "^19.2.18",
-    "typescript": "^5"
+    "@types/react": "^19.3.0",
+    "typescript": "^5.9.3"
   }
 }
