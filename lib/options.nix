@@ -109,6 +109,38 @@ in
       '';
     };
 
+    clipboard = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        A gui machine's window is a SPICE client (remote-viewer) with the
+        vdagent channel, instead of QEMU's GTK window - which has no
+        clipboard. With the guest's spice-vdagent: copy and paste both ways,
+        and files dragged onto the window. Set by plugins/clipboard.nix.
+      '';
+    };
+
+    shares = mkOption {
+      type = types.attrsOf (types.submodule {
+        options.source = mkOption {
+          type = types.str;
+          description = "The host folder - a shell word, so $HOME works. Created if missing.";
+        };
+        options.target = mkOption {
+          type = types.str;
+          description = "Where the guest mounts it.";
+        };
+      });
+      default = { };
+      description = ''
+        Host folders the guest mounts, by 9p mount tag: the runner hands them
+        to QEMU (-virtfs, no daemon) and the builder mounts them on every
+        boot. The host folder is the user's, not machine state - `vm kill`
+        leaves it alone. Set by plugins/share.nix. Linux guests only: Windows
+        has no 9p.
+      '';
+    };
+
     ubuntu = {
       release = mkOption {
         type = types.enum [ "26.04" "24.04" ];

@@ -117,6 +117,13 @@ plugins, since list options from all of them concatenate.
 | `repos` | `repos = [ { url; dir; } ]` cloned on desktop login, once the machine's vm-ssh key is on GitHub | the same |
 | `direnv` | direnv + nix-direnv from nixpkgs, zsh hook, `direnv.trusted` folders | `programs.direnv`, the same |
 | `zoxide` | zoxide from nixpkgs, zsh hook | `programs.zoxide` |
+| `share` | the host's `~/vm-share` is the guest's `~/vm-share`, live, both ways (9p, mounted every boot); `vm kill` leaves it alone | the same |
+| `clipboard` | copy/paste with the host, files dragged onto the window land in `~/Downloads`: the window is `remote-viewer` (SPICE) + `spice-vdagent` | the same |
+
+No QEMU display has a clipboard for files - copying a file on one side and
+pasting it on the other doesn't exist; drag it onto the window, or use
+`~/vm-share`. Neither has a Windows half: Windows has no 9p, and its
+display stays QEMU's own.
 
 ## Recipes and the wizard
 
@@ -267,8 +274,14 @@ there.
 ## State and access
 
 Everything a machine writes lives in `~/.local/state/vms/<name>/`: the disk
-overlay, the cloud-init seed, the SSH port, the console log (with `-d`), its
-`vm-ssh` keypair, and a GC root for its build. `vm kill` is a single `rm -rf` of that directory.
+overlay, the cloud-init seed, the SSH port, the console log (with `-d`; a
+desktop machine's serial console - its first boot's install - goes there
+too), its `vm-ssh` keypair, and a GC root for its build. `vm kill` is a single `rm -rf` of that directory.
+
+A running machine is `booting` (`vm ls`, and the dashboard, which shows the
+console log's end meanwhile) until the guest says it's done - over the
+`vms.host` port, once the first boot's install has finished; Windows once
+sshd answers - and `running` after.
 
 `vm` generates one keypair of its own, `~/.local/state/vms/id_ed25519`, on first
 use and hands the public key to each guest at boot. Ubuntu gets it through the

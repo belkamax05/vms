@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { machineNames, machineSource, type Repo } from '../repo';
 import {
   blankRecipe,
+  describeRecipe,
+  recipeFor,
   type Catalog,
   forgetRecipe,
   isBuiltin,
@@ -48,6 +50,7 @@ const catalog: Catalog = {
   defaultTools: ['bun'],
   toolOrder: ['Languages & build'],
   presets: {},
+  templates: { ubuntu: { os: 'ubuntu', desktop: null } },
 };
 
 let home: string;
@@ -145,4 +148,22 @@ test('an older catalog - flat tools, no keyboards - still reads', () => {
   expect(old.tools).toEqual({ Tools: ['bun', 'fd'] });
   expect(old.keyboards).toEqual({ us: 'English (US)' });
   expect(recipeProblems(old, { os: 'ubuntu' })).toEqual([]);
+});
+
+test("a repo template is the recipe the catalog says, shown in the wizard's words", () => {
+  mkdirSync(join(repo.root, 'machines'), { recursive: true });
+  writeFileSync(join(repo.root, 'machines', 'ubuntu.nix'), '{ os = "ubuntu"; }\n');
+  writeFileSync(join(repo.root, 'machines', 'odd.nix'), '{ os = "ubuntu"; }\n');
+  expect(recipeFor(repo, catalog, 'ubuntu')).toEqual({ os: 'ubuntu', desktop: null, features: [] });
+  // A hand-written machine the catalog doesn't know has no recipe to show or copy.
+  expect(recipeFor(repo, catalog, 'odd')).toBeUndefined();
+  expect(
+    describeRecipe(catalog, { os: 'ubuntu', desktop: 'gnome', keyboard: 'pt', tools: ['bun'] }),
+  ).toEqual([
+    ['OS', 'Ubuntu 26.04'],
+    ['Desktop', 'GNOME'],
+    ['Keyboard', 'Portuguese'],
+    ['Features', 'none'],
+    ['Tools', 'bun'],
+  ]);
 });

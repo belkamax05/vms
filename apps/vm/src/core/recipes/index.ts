@@ -54,6 +54,8 @@ export interface Catalog {
   /** The order tool groups are shown in; others after. */
   toolOrder: string[];
   presets: Record<string, Recipe>;
+  /** The repo's hand-written machines (machines/*.nix) as the recipes they are, by name. */
+  templates: Record<string, Recipe>;
 }
 
 /** Ubuntu for every Ubuntu release: what features and desktops say they run on. */
@@ -97,13 +99,16 @@ export const normalizeCatalog = (raw: Partial<Record<keyof Catalog, unknown>>): 
   defaultTools: (raw.defaultTools ?? []) as string[],
   toolOrder: (raw.toolOrder ?? []) as string[],
   presets: (raw.presets ?? {}) as Catalog['presets'],
+  templates: (raw.templates ?? {}) as Catalog['templates'],
 });
 
 const catalogs = new Map<string, Catalog>();
 
 /** The last catalog read, on disk - so the wizard opens at once, before Nix answers. */
-const cacheFile = (repo: Repo) =>
-  join(process.env.XDG_CACHE_HOME || join(homedir(), '.cache'), 'vms', repo.name, 'catalog.json');
+/** vm's cache for the repo: the last catalog read. Only a cache - safe to delete. */
+export const cacheDir = (repo: Repo) =>
+  join(process.env.XDG_CACHE_HOME || join(homedir(), '.cache'), 'vms', repo.name);
+const cacheFile = (repo: Repo) => join(cacheDir(repo), 'catalog.json');
 
 /** The catalog known without asking Nix: this process's, or the last one on disk. */
 export const cachedCatalog = (repo: Repo): Catalog | undefined => {
@@ -185,6 +190,46 @@ export const readRecipe = (repo: Repo, name: string): Recipe | undefined => {
   const source = machineSource(repo, name);
   if (!source || source.kind === 'module') return undefined;
   return JSON.parse(readFileSync(source.path, 'utf8')) as Recipe;
+};
+
+/**
+ * The recipe a machine is: its own file's, or - for one of the repo's hand-written machines - the
+ * one the catalog says it's equal to (`templates`). What the dashboard shows and the wizard
+ * starts from when it's copied; undefined for a hand-written machine the catalog doesn't know.
+ */
+export const recipeFor = (repo: Repo, catalog: Catalog, name: string): Recipe | undefined => {
+  const own = readRecipe(repo, name);
+  if (own) return own;
+  const source = machineSource(repo, name);
+  const template = source?.kind === 'module' && !source.extra ? catalog.templates[name] : undefined;
+  return template && { ...template, features: [...(template.features ?? [])] };
+};
+
+/**
+ * A recipe in words, row by row - what the wizard's review shows and the dashboard shows for
+ * every machine. Features include what they pull in and what the OS has built in.
+ */
+export const describeRecipe = (catalog: Catalog, recipe: Recipe): [string, string][] => {
+  const label = (id: string) => catalog.features[id]?.label ?? id;
+  const desktop = recipe.desktop
+    ? (catalog.desktops[recipe.desktop]?.label ?? recipe.desktop)
+    : 'none - a serial console';
+  return [
+    ['OS', catalog.os[recipe.os]?.label ?? recipe.os],
+    ['Desktop', desktop],
+    ...(recipe.desktop
+      ? [
+          ['Keyboard', catalog.keyboards[recipe.keyboard ?? 'us'] ?? recipe.keyboard ?? 'us'] as [
+            string,
+            string,
+          ],
+        ]
+      : []),
+    ['Features', [...resolveFeatures(catalog, recipe).on].map(label).join(', ') || 'none'],
+    ...(hasTools(catalog, recipe.os)
+      ? [['Tools', recipe.tools?.join(', ') || 'none'] as [string, string]]
+      : []),
+  ];
 };
 
 /**

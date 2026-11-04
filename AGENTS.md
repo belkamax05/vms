@@ -39,7 +39,10 @@ action. The user stages and commits everything themselves. See
   private.
 - **All of a machine's host state lives in `~/.local/state/vms/<name>/`**,
   so that `vm kill` removes it with a single `rm -rf`. Nothing may write
-  outside it, except the shared `id_ed25519` keypair next to it.
+  outside it, except the shared `id_ed25519` keypair next to it and the
+  host folders a machine shares (`shares`, `~/vm-share` from
+  `plugins/share.nix`), which are the user's files, not machine state:
+  `vm kill` must never delete them.
 - **Pin every external input.** That covers the Windows ISO (a fixed URL, its
   hash in the machine's lockfile from `vm lock`, which `up` runs - never a
   download the user does by hand) and every installer a Windows half fetches

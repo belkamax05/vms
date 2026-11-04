@@ -34,7 +34,7 @@
 #
 # The image's store path is only ever a read-only qcow2 backing file - each
 # VM writes to its own overlay in its state dir.
-{ pkgs, lib, cfg, mkRunner, lockFile, hostRequests, ... }:
+{ pkgs, lib, cfg, mkRunner, lockFile, hostRequests, shares, window, ... }:
 
 let
   # Images by Nix's own downloader, so `vm` can show their progress.
@@ -423,7 +423,11 @@ let
     ])
   ];
 
+  # Holds the cloud-init instance it was provisioned for: a changed config is a
+  # new instance on the same disk, provisioned again - not done until then.
   provisioned = "/var/lib/vms/provisioned";
+  instanceIdFile = "/var/lib/cloud/data/instance-id";
+  isProvisioned = "[ \"$(cat ${provisioned} 2>/dev/null)\" = \"$(cat ${instanceIdFile} 2>/dev/null)\" ]";
   # The first-boot steps that install and configure: deferred files, and
   # runcmd (written by `runcmd`, run by `scripts_user`).
   retried = [ "write_files_deferred" "runcmd" "scripts_user" ];
@@ -443,6 +447,11 @@ let
     ssh_pwauth = false;
   };
 
+  # cfg.shares mounted - `|| true`: a share that fails never stops a boot.
+  mountShares = lib.mapAttrsToList (tag: s:
+    "mkdir -p ${s.target} && chown ${cfg.user} ${s.target}; modprobe 9pnet_virtio 2>/dev/null; mountpoint -q ${s.target} || mount -t 9p -o ${shares.options} ${tag} ${s.target} || true"
+  ) cfg.shares;
+
   cloudConfig = lib.recursiveUpdate (base // {
     write_files = distro.console.files ++ userKey ++ distro.writeFiles ++ cfg.cloud.writeFiles;
     # cloud-init marks a step done when it *starts* it, so a first boot cut
@@ -451,16 +460,23 @@ let
     # last step below has run, each boot finishes what the package manager
     # was doing and clears those steps' marks first - bootcmd runs before any
     # of them - so the same boot does them again.
+    # Ready (`vm` stops showing it as booting): on a later boot right away,
+    # on the first once the last step has run.
     bootcmd = [
-      "[ -e ${provisioned} ] || { ${distro.recover}rm -f ${lib.concatMapStringsSep " " (m: "/var/lib/cloud/instance/sem/config_${m}") retried}; }"
-    ];
-    runcmd = distro.console.runcmd
+      "${isProvisioned} || { ${distro.recover}rm -f ${lib.concatMapStringsSep " " (m: "/var/lib/cloud/instance/sem/config_${m}") retried}; }"
+      "! ${isProvisioned} || { ${hostRequests.say "ready"}; }"
+    # Shares, every boot - once the user exists: a mount point made in a home
+    # that isn't there yet would leave the home root's (a first boot mounts
+    # them from runcmd instead).
+    ] ++ map (mount: "id -u ${cfg.user} >/dev/null 2>&1 && { ${mount}; } || true") mountShares;
+    runcmd = map (mount: [ "sh" "-c" mount ]) mountShares
+      ++ distro.console.runcmd
       ++ lib.optional (packages != [ ]) installPackages
       ++ lib.optional nixPackages installNixPackages
       ++ distro.runcmd ++ cfg.cloud.runcmd ++ [
       # Only once every package is really there: runcmd carries on past a
       # failed step, and a failed install must be retried next boot.
-      [ "sh" "-c" "${lib.optionalString (packages != [ ]) "${distro.installed} && "}${lib.optionalString nixPackages "[ \"$(readlink ${nixProfile})\" = ${nixEnv} ] && "}mkdir -p ${dirOf provisioned} && touch ${provisioned}" ]
+      [ "sh" "-c" "${lib.optionalString (packages != [ ]) "${distro.installed} && "}${lib.optionalString nixPackages "[ \"$(readlink ${nixProfile})\" = ${nixEnv} ] && "}mkdir -p ${dirOf provisioned} && cat ${instanceIdFile} > ${provisioned} && { ${hostRequests.say "ready"}; }" ]
     ];
   }) (lib.optionalAttrs isUbuntu cfg.ubuntu.cloudConfig);
 
@@ -484,11 +500,15 @@ let
   instanceId = "${cfg.name}-${builtins.substring 0 12 (builtins.hashString "sha256" (toString userData))}";
 in
 mkRunner {
+  image = distro.image;
   # VM_LOCK=1 (`vm lock`) boots the lock configuration instead; the rest of
   # the contract is the same. The repo server lives as long as QEMU does.
   script = ''
+    # shellcheck disable=SC2054,SC2206 # QEMU's options are comma lists, and $VM_STATE has no spaces
     display=(${if cfg.gui
-      then "-vga none -device virtio-vga-gl -display 'gtk,gl=on' -serial null"
+      # The serial console - where cloud-init's progress goes - into
+      # console.log beside the runner's own output, for `vm` to show.
+      then "-vga none -device virtio-vga-gl -display ${window.display} ${window.qemuArgs} -chardev \"file,id=serial0,path=$VM_STATE/console.log,append=on\" -serial chardev:serial0"
       else "-nographic"})
     if [ "''${VM_LOCK:-0}" = 1 ]; then
       user_data=${lockUserData}
@@ -534,8 +554,10 @@ mkRunner {
       "$VM_STATE/seed/user-data" "$VM_STATE/seed/meta-data" 2>/dev/null
 
     ${hostRequests.start}
+    ${shares.setup}
+    ${if cfg.gui then window.start else ""}
     # shellcheck disable=SC2086 # hostRequests.qemuArgs is several words
-    qemu-system-x86_64 ${hostRequests.qemuArgs} \
+    qemu-system-x86_64 ${hostRequests.qemuArgs} ${shares.qemuArgs} \
       -name ${cfg.name} -enable-kvm -machine q35 -cpu host \
       -smp ${toString cfg.cpus} -m ${toString cfg.memory} \
       -drive if=virtio,file="$disk" \
@@ -546,5 +568,5 @@ mkRunner {
       -pidfile "$VM_STATE/qemu.pid" \
       "''${display[@]}"
   '';
-  runtimeInputs = [ pkgs.qemu pkgs.xorriso pkgs.gnused pkgs.coreutils pkgs.python3 ];
+  runtimeInputs = [ pkgs.qemu pkgs.xorriso pkgs.gnused pkgs.coreutils pkgs.python3 ] ++ window.runtimeInputs;
 }

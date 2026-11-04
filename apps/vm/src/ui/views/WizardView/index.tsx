@@ -18,6 +18,7 @@ import {
   allTools,
   toolGroups,
   blankRecipe,
+  describeRecipe,
   type Catalog,
   familyOf,
   hasDesktops,
@@ -25,7 +26,7 @@ import {
   isBuiltin,
   nameProblem,
   type Recipe,
-  readRecipe,
+  recipeFor,
   recipeProblems,
   resolveFeatures,
   saveRecipe,
@@ -121,7 +122,7 @@ export const WizardView = ({
   const prompt = usePrompt(onCaptureInput);
 
   const startFrom = (source?: string): Recipe => {
-    const base = (source && readRecipe(repo, source)) || blankRecipe(catalog);
+    const base = (source && recipeFor(repo, catalog, source)) || blankRecipe(catalog);
     return { ...base, features: [...(base.features ?? [])], tools: [...(base.tools ?? [])] };
   };
   const [origin, setOrigin] = useState<string | undefined>(from);
@@ -260,7 +261,8 @@ export const WizardView = ({
   };
 
   // The step's rows, and what Enter (or a click) on each does.
-  const recipes = machineSources(repo).filter((source) => source.kind !== 'module');
+  // Every machine with a recipe to copy: yours, recipes, and the repo's templates (its machines/*.nix).
+  const recipes = machineSources(repo).filter((source) => recipeFor(repo, catalog, source.name));
   let items: PickItem<() => void>[] = [];
   switch (step) {
     case 'start':
@@ -280,7 +282,7 @@ export const WizardView = ({
         },
         ...(recipes.length ? [{ id: 'h-machines', label: 'Copy a machine', isHeader: true }] : []),
         ...recipes.map((source) => {
-          const base = readRecipe(repo, source.name);
+          const base = recipeFor(repo, catalog, source.name);
           return {
             id: source.name,
             label: source.name,
@@ -560,12 +562,11 @@ export const WizardView = ({
     { hotkey: 'Esc', label: 'Cancel', onPress: onCancel, tone: 'danger' },
   ];
 
+  // The same words the dashboard shows every machine in (describeRecipe), then what's left.
   const summary = [
-    `${name} · ${osLabel} · ${recipe.desktop ? (catalog.desktops[recipe.desktop]?.label ?? recipe.desktop) : 'no desktop'}`,
-    `features: ${[...resolved.on].map((id) => catalog.features[id]?.label ?? id).join(', ') || 'none'}`,
-    `tools: ${recipe.tools?.join(', ') || 'none'}`,
-    `keyboard: ${catalog.keyboards[recipe.keyboard ?? 'us'] ?? recipe.keyboard}`,
-    `size: ${recipe.cpus ?? 'default'} CPUs · ${recipe.memory ?? 'default'} MiB · ${recipe.diskSize ?? 'default'} MiB disk`,
+    `Name      ${name}`,
+    ...describeRecipe(catalog, recipe).map(([label, value]) => `${label.padEnd(9)} ${value}`),
+    `Size      ${recipe.cpus ?? 'default'} CPUs · ${recipe.memory ?? 'default'} MiB memory · ${recipe.diskSize ?? 'default'} MiB disk`,
   ];
   const listRows = Math.max(4, viewport.rows - 22);
 

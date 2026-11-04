@@ -9,13 +9,16 @@ import { useColors } from '@/dev-tools/ui/providers/TuiThemeProvider';
 import { nextThemeId } from '@/dev-tools/ui/theme';
 
 import type { VmConfig } from '../../config/settings';
-import { machineStatus } from '../../core/machine';
+import { fetchMachineInfo, type MachineInfo, machineStatus } from '../../core/machine';
 import { type Catalog, cachedCatalog, fetchCatalog } from '../../core/recipes';
 import { extraSources, machineNames, type Repo, tildify } from '../../core/repo';
 import vmTheme from '../theme';
 import type { Handoff, Session, Tone, Work } from '../types';
 import MachinesView from '../views/MachinesView';
 import WizardView, { CatalogPending } from '../views/WizardView';
+
+/** The last machine settings read, per repo - shown at once when the dashboard reopens. */
+const lastInfo = new Map<string, Record<string, MachineInfo>>();
 
 type TabId = 'machines';
 
@@ -110,6 +113,25 @@ export const App = ({
     [repo.root],
   );
   const { reload } = snapshot;
+
+  /**
+   * Every machine's effective settings (sizes, user), evaluated in the background whenever the
+   * list of machines changes - the last answer shown meanwhile, across handoffs too.
+   */
+  const [info, setInfo] = useState<Record<string, MachineInfo>>(
+    () => lastInfo.get(repo.root) ?? {},
+  );
+  const names = (snapshot.data ?? []).map((entry) => entry.name).join(' ');
+  useEffect(() => {
+    if (!names) return;
+    fetchMachineInfo(repo, names.split(' ')).then(
+      (next) => {
+        lastInfo.set(repo.root, next);
+        setInfo(next);
+      },
+      () => {},
+    );
+  }, [repo, names]);
 
   useEffect(() => {
     if (config.refreshSeconds <= 0 || isInputCaptured) return;
@@ -217,6 +239,8 @@ export const App = ({
         <MachinesView
           repo={repo}
           statuses={statuses}
+          catalog={catalog}
+          info={info}
           isLoading={snapshot.isLoading}
           working={working}
           setWorking={setWorking}

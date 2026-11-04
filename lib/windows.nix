@@ -16,7 +16,7 @@
 # The install takes 15-30 minutes on the first `up`, rebooting itself a few
 # times; `bootTimeout` gives `vm ssh` an hour for it. Later boots are a
 # normal Windows boot.
-{ pkgs, lib, cfg, mkRunner, lockFile, ... }:
+{ pkgs, lib, cfg, mkRunner, lockFile, hostRequests, ... }:
 
 let
   fetchImage = import ./fetch-image.nix;
@@ -260,6 +260,7 @@ in
 assert lib.assertMsg (cfg.packages == [ ])
   "${cfg.name}: tools come from nixpkgs, which has no Windows builds - leave them out";
 mkRunner {
+  image = iso;
   # `vm up` locks first when the lockfile is missing or stale (see
   # apps/vm/src/core/lock), so this only shows when the runner is run by hand.
   script = if lockProblem != null then ''
@@ -283,6 +284,9 @@ mkRunner {
     rm -f "$VM_STATE/keys.iso"
     xorriso -as genisoimage -quiet -output "$VM_STATE/keys.iso" -volid VMSKEYS -joliet -rock \
       "$VM_STATE/keys" 2>/dev/null
+
+    # sshd starts last, after the install and firstLogon - its answer is ready.
+    ${hostRequests.readyOnSsh}
 
     monitor="$VM_STATE/monitor.sock"
     rm -f "$monitor"

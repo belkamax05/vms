@@ -35,11 +35,16 @@ let
   #
   #   open ssh-new   GitHub's "add SSH key" page
   #   open keys      GitHub's SSH keys, where a key is authorized for SSO
+  #   ready          the guest is done booting - on a first boot, done
+  #                  provisioning: $VM_STATE/ready, which `vm` shows (the
+  #                  runner contract's `ready` - see mkRunner's meta)
   hostRequests = {
     qemuArgs = "-device virtio-serial-pci,id=vmsserial -chardev file,id=vmshost,path=$VM_STATE/host-requests,append=on -device virtserialport,bus=vmsserial.0,chardev=vmshost,name=vms.host";
     start = ''
       : > "$VM_STATE/host-requests"
+      rm -f "$VM_STATE/ready"
       tail -n 0 -F --pid=$$ "$VM_STATE/host-requests" 2>/dev/null | while read -r verb page; do
+        if [ "$verb" = ready ]; then touch "$VM_STATE/ready"; continue; fi
         [ "$verb" = open ] || continue
         case $page in
           ssh-new) url=https://github.com/settings/ssh/new ;;
@@ -48,6 +53,24 @@ let
         esac
         xdg-open "$url" >/dev/null 2>&1 &
       done &
+    '';
+    # A guest shell command saying `word` on the port. By sysfs name rather
+    # than /dev/virtio-ports/vms.host, which needs udev's rule: early in
+    # boot (cloud-init's bootcmd) and on Alpine it may not be there yet.
+    say = word: "modprobe virtio_console 2>/dev/null; for p in /sys/class/virtio-ports/*; do [ \"$(cat \"$p/name\" 2>/dev/null)\" = vms.host ] && echo ${word} > \"/dev/\${p##*/}\"; done; true";
+    # For a guest that can't say it (Windows: no virtio drivers): ready once
+    # sshd answers with its banner - QEMU's port forward accepts even with
+    # nothing listening behind it, so a connection alone proves nothing.
+    readyOnSsh = ''
+      rm -f "$VM_STATE/ready"
+      (
+        # shellcheck disable=SC2016 # $1 is the inner shell's
+        until [ "$(timeout 5 "$BASH" -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"; head -c 4 <&3' _ "$VM_SSH_PORT" 2>/dev/null)" = SSH- ]; do
+          kill -0 $$ 2>/dev/null || exit 0
+          sleep 5
+        done
+        touch "$VM_STATE/ready"
+      ) &
     '';
   };
 in
@@ -74,7 +97,9 @@ rec {
       # The apt guests' packages - what `vm lock` locks; null elsewhere.
       aptPackages = { ubuntu = cfg.ubuntu.packages; debian = cfg.debian.packages; }.${cfg.os} or null;
 
-      mkRunner = { script, runtimeInputs ? [ ] }:
+      # `image`: what it boots or installs from, downloaded into the Nix store
+      # (a cloud image, Windows' ISO) - its path in meta, for `vm` to show.
+      mkRunner = { script, runtimeInputs ? [ ], image ? null }:
         let
           run = pkgs.writeShellApplication {
             name = "vm-run-${name}";
@@ -100,6 +125,8 @@ rec {
           github_user=${lib.escapeShellArg (if cfg.github.user == null then "" else cfg.github.user)}
           apt=${lib.boolToString (aptPackages != null)}
           boot_timeout=${toString cfg.bootTimeout}
+          ready=true
+          image=${if image == null then "" else toString image}
           iso_url=${lib.escapeShellArg (if cfg.os == "windows" then cfg.windows.iso else "")}
           packages=${lib.escapeShellArg (lib.concatStringsSep " " (lib.unique (if aptPackages == null then [ ] else aptPackages)))}
           EOF
@@ -108,8 +135,46 @@ rec {
       # NixOS is built here; Windows installs itself from its ISO (unattended);
       # everything else boots its distro's cloud image.
       builder = { nixos = ./nixos.nix; windows = ./windows.nix; }.${cfg.os} or ./cloud.nix;
+
+      # cfg.shares for the runner: the host folders made, and QEMU's 9p
+      # devices for them. security_model=none: the guest's files are the
+      # host user's, so both sides can edit them. Unquoted, to sit in
+      # NixOS' QEMU_OPTS too: a source can't have spaces.
+      shares = {
+        setup = lib.concatMapStrings (s: "mkdir -p \"${s.source}\"\n") (lib.attrValues cfg.shares);
+        qemuArgs = lib.concatStringsSep " " (lib.mapAttrsToList
+          (tag: s: "-virtfs local,path=${s.source},mount_tag=${tag},security_model=none,id=${tag}")
+          cfg.shares);
+        # The guest's mount options, the same on every Linux guest.
+        options = "trans=virtio,version=9p2000.L,msize=1048576";
+      };
+
+      # A gui machine's window: QEMU's GTK one, or with cfg.clipboard a SPICE
+      # client. Then QEMU serves SPICE (GL: a local socket) with the vdagent
+      # port - on hostRequests' virtio-serial bus, so its qemuArgs must come
+      # first - and `start` opens remote-viewer on it once it's there.
+      # Started by the runner, not QEMU's spice-app, which needs a desktop
+      # handler for spice+unix:// registered on the host. Closing it powers
+      # the machine off, as closing the GTK window does.
+      window = {
+        display = if cfg.clipboard then "none" else "gtk,gl=on";
+        qemuArgs = lib.optionalString cfg.clipboard
+          "-spice unix=on,addr=$VM_STATE/spice.sock,disable-ticketing=on,gl=on -chardev spicevmc,id=vdagent,name=vdagent -device virtserialport,bus=vmsserial.0,chardev=vdagent,name=com.redhat.spice.0";
+        start = lib.optionalString cfg.clipboard ''
+          rm -f "$VM_STATE/spice.sock"
+          (
+            until [ -S "$VM_STATE/spice.sock" ]; do
+              kill -0 $$ 2>/dev/null || exit 0
+              sleep 0.2
+            done
+            remote-viewer --title ${lib.escapeShellArg cfg.name} "spice+unix://$VM_STATE/spice.sock" >/dev/null 2>&1 || true
+            if [ -s "$VM_STATE/qemu.pid" ]; then kill "$(cat "$VM_STATE/qemu.pid")" 2>/dev/null || true; fi
+          ) &
+        '';
+        runtimeInputs = lib.optional cfg.clipboard pkgs.virt-viewer;
+      };
     in
-    import builder { inherit pkgs lib cfg mkRunner lockFile hostRequests nixpkgs; };
+    import builder { inherit pkgs lib cfg mkRunner lockFile hostRequests shares window nixpkgs; };
 
   # A directory of machines/<name>.nix -> { <name> = package; }, no registry
   # to edit. This repo's own flake and any repo extending it call this on

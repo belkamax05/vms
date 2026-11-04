@@ -103,6 +103,22 @@ let
         os = linux;
         requires = [ "zsh" ];
       };
+      share = {
+        label = "Shared folder";
+        description = "the host's ~/vm-share is the guest's ~/vm-share, live, both ways";
+        group = "Host";
+        module = ../plugins/share.nix;
+        os = linux;
+        default = true;
+      };
+      clipboard = {
+        label = "Clipboard";
+        description = "copy and paste with the host, and files dragged onto the window (SPICE)";
+        group = "Host";
+        module = ../plugins/clipboard.nix;
+        os = linux;
+        desktop = true;
+      };
       nix = {
         label = "Nix";
         description = "the Nix package manager, flakes on";
@@ -158,6 +174,18 @@ let
     };
 
     presets = { };
+
+    # The repo's hand-written machines (machines/*.nix) as the recipes they
+    # are - what `vm` shows for each, and what the wizard starts from when
+    # one is copied. Every OS whose base is machines/<id>.nix is that
+    # machine; the -gui ones are it plus gui.nix, which is GNOME.
+    templates =
+      lib.mapAttrs (id: _: { os = id; desktop = null; })
+        (lib.filterAttrs (id: entry: (entry.base or null) == ../machines + "/${id}.nix") catalog.os)
+      // {
+        ubuntu-gui = { os = "ubuntu"; desktop = "gnome"; };
+        nixos-gui = { os = "nixos"; desktop = "gnome"; };
+      };
   };
 
   # Only what `vm` shows: no module or base paths, which would drag the
@@ -174,6 +202,7 @@ let
     defaultTools = lib.unique (base.defaultTools ++ (extra.defaultTools or [ ]));
     toolOrder = lib.unique (base.toolOrder ++ (extra.toolOrder or [ ]));
     presets = base.presets // (extra.presets or { });
+    templates = base.templates // (extra.templates or { });
   };
 in
 {
@@ -191,5 +220,6 @@ in
     desktops = strip c.desktops;
     features = strip c.features;
     inherit (c) tools defaultTools toolOrder keyboards presets;
+    templates = c.templates or { };
   };
 }

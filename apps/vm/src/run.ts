@@ -21,7 +21,7 @@ import {
   loadCatalog,
   nameProblem,
   type Recipe,
-  readRecipe,
+  recipeFor,
   recipeProblems,
   saveRecipe,
   unavailable,
@@ -74,7 +74,7 @@ const log: Log = (text) => console.error(text);
 /** What `vm ls` prints after the name. */
 export const describeStatus = (status: MachineStatus) =>
   status.state === 'running'
-    ? `running  ssh :${status.sshPort}  pid ${status.pid}`
+    ? `${status.booting ? 'booting' : 'running'}  ssh :${status.sshPort}  pid ${status.pid}`
     : status.state === 'stopped'
       ? `stopped  (disk kept - vm kill ${status.name} to drop it)`
       : '-';
@@ -188,7 +188,7 @@ export const run = async (...argv: string[]) => {
         const from = option('--from');
         let recipe: Recipe;
         if (from) {
-          const base = readRecipe(repo, from);
+          const base = recipeFor(repo, catalog, from);
           if (!base)
             throw new VmError(`${from} has no recipe to start from (a hand-written machine?)`);
           recipe = { ...base };

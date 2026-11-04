@@ -24,6 +24,7 @@ import {
   isImpure,
   lockFile,
   machineSource,
+  type MachineSource,
   type Repo,
   sharedKey,
   stateDir,
@@ -55,6 +56,21 @@ export interface Meta {
   bootTimeout: number;
   /** The ISO it installs from (Windows): `vm lock` downloads it once and pins its hash. */
   isoUrl?: string;
+  /**
+   * The runner writes `<stateDir>/ready` once the guest is done booting (provisioning, on a
+   * first boot). Builds from before it don't - they're never shown as booting.
+   */
+  reportsReady: boolean;
+  /** What it boots or installs from, in the Nix store: a cloud image, Windows' ISO. */
+  image?: string;
+}
+
+/** A machine's effective settings - its plugins' and recipe's together, as it will boot. */
+export interface MachineInfo {
+  user: string;
+  cpus: number;
+  memory: number;
+  diskSize: number;
 }
 
 export type MachineState = 'running' | 'stopped' | 'absent';
@@ -63,8 +79,12 @@ export interface MachineStatus {
   name: string;
   /** The repos.d folder it comes from - none for the repo's own and the wizard's. */
   from?: string;
+  /** `mine`: made with `vm new` (the wizard); otherwise a machine file or recipe of a repo's. */
+  kind?: MachineSource['kind'];
   /** `stopped`: not running, but its state dir (disk and all) is kept. `absent`: no state. */
   state: MachineState;
+  /** Running, but not done booting - on a first boot, still installing (console.log says what). */
+  booting: boolean;
   pid?: number;
   sshPort?: number;
   stateDir: string;
@@ -108,6 +128,8 @@ export const readMeta = (dir: string): Meta | undefined => {
     // Builds from before the field waited 5 minutes.
     bootTimeout: Number(values.boot_timeout) || 300,
     isoUrl: values.iso_url || undefined,
+    reportsReady: values.ready === 'true',
+    image: values.image || undefined,
   };
 };
 
@@ -200,10 +222,13 @@ export const machineStatus = (repo: Repo, name: string): MachineStatus => {
   const pid = pidOf(name);
   const port = Number(readText(join(dir, 'ssh-port')));
   const publicKey = readText(join(dir, 'vm-ssh.pub'));
+  const source = machineSource(repo, name);
   return {
     name,
-    from: machineSource(repo, name)?.extra?.name,
+    from: source?.extra?.name,
+    kind: source?.kind,
     state: pid ? 'running' : hasState(dir) ? 'stopped' : 'absent',
+    booting: Boolean(pid && meta?.reportsReady && !existsSync(join(dir, 'ready'))),
     pid,
     sshPort: port > 0 ? port : undefined,
     stateDir: dir,
@@ -366,6 +391,42 @@ const buildTarget = (repo: Repo, name: string): string[] => {
   return ['--impure', '--expr', `${build} ${JSON.stringify(name)} ${pathExpr(source.path)}`];
 };
 
+/** The machine's runner package as a Nix expression - what buildTarget builds, for --impure evals. */
+const machineExpr = (repo: Repo, name: string): string => {
+  const source = machineSource(repo, name);
+  if (!source || !isImpure(source))
+    return `${flakeExpr(repo)}.packages.x86_64-linux.${JSON.stringify(name)}`;
+  const [, , expr] = buildTarget(repo, name);
+  return `(${expr})`;
+};
+
+/**
+ * Every machine's effective settings (MachineInfo), by name - evaluated, not built: only the
+ * machine's own module system, so it takes seconds and downloads nothing. One machine that fails
+ * to evaluate fails it all; the dashboard then shows no sizes.
+ */
+export const fetchMachineInfo = (repo: Repo, names: string[]) =>
+  new Promise<Record<string, MachineInfo>>((resolve, reject) => {
+    const machines = names.map((name) => `${JSON.stringify(name)} = ${machineExpr(repo, name)};`);
+    const expr = `builtins.mapAttrs (_: m: { inherit (m.cfg) user cpus memory diskSize; }) { ${machines.join(' ')} }`;
+    const child = spawn('nix', ['eval', '--json', '--impure', '--expr', expr], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0) reject(new VmError(nixError(stderr) || 'nix eval failed'));
+      else resolve(JSON.parse(stdout));
+    });
+  });
+
 /** `buildOnce`, again after re-locking when the repo's lock was behind its submodule. */
 export const build = async (repo: Repo, name: string, onOutput?: Log) => {
   try {
@@ -463,7 +524,9 @@ export const launchDetached = async (
   env: NodeJS.ProcessEnv,
 ) => {
   rmSync(join(dir, 'qemu.pid'), { force: true });
-  const output = openSync(join(dir, 'console.log'), 'w');
+  // Appended to: a desktop machine's QEMU writes its serial console there too.
+  writeFileSync(join(dir, 'console.log'), '');
+  const output = openSync(join(dir, 'console.log'), 'a');
   const child = spawn(runner, [], { detached: true, stdio: ['ignore', output, output], env });
   closeSync(output);
   let exited = false;
@@ -512,6 +575,8 @@ export const upAttached = async (repo: Repo, name: string, log: Log, interactive
   if (meta && !meta.gui) {
     log(`Serial console - Ctrl-a x powers the VM off. vm ssh ${name} works from another terminal.`);
   }
+  // This boot's log only - a desktop machine's serial console is appended to it.
+  writeFileSync(join(dir, 'console.log'), '');
   const result = spawnSync(runnerBin(name), [], {
     stdio: 'inherit',
     env: runnerEnv(name, dir, port),

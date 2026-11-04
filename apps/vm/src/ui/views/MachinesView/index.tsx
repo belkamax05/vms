@@ -1,19 +1,18 @@
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { Text, useInput } from 'ink';
-import type { Dispatch, SetStateAction } from 'react';
+import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import { useEffect, useState } from 'react';
 
 import Box from '@/dev-tools/ui/components/Box';
 import LinkRow from '@/dev-tools/ui/components/LinkRow';
 import ListDetail from '@/dev-tools/ui/components/ListDetail';
-import Panel from '@/dev-tools/ui/components/Panel';
 import type { PickItem } from '@/dev-tools/ui/components/PickList';
 import Toolbar, { type ToolbarAction } from '@/dev-tools/ui/components/Toolbar';
 import useAnimationClock from '@/dev-tools/ui/hooks/useAnimationClock';
 import usePrompt from '@/dev-tools/ui/hooks/usePrompt';
 import { useColors } from '@/dev-tools/ui/providers/TuiThemeProvider';
-import openUrl from '@/dev-tools/utils/system/openUrl';
 import revealPath from '@/dev-tools/utils/system/revealPath';
 
 import {
@@ -22,13 +21,20 @@ import {
   githubAccessProblem,
   importUserKey,
   kill,
+  type MachineInfo,
   type MachineStatus,
   rotateUserKey,
   StartError,
   upDetached,
 } from '../../../core/machine';
 import { ensureLocked } from '../../../core/lock';
-import { forgetRecipe } from '../../../core/recipes';
+import {
+  cacheDir,
+  type Catalog,
+  describeRecipe,
+  forgetRecipe,
+  recipeFor,
+} from '../../../core/recipes';
 import {
   displayPath,
   lockFile,
@@ -44,6 +50,10 @@ import type { Handoff, Session, Tone, Work } from '../../types';
 export interface MachinesViewProps {
   repo: Repo;
   statuses: MachineStatus[];
+  /** The repo's catalog, once read - what each machine's recipe is shown in the words of. */
+  catalog?: Catalog;
+  /** Each machine's effective sizes and user, once evaluated. */
+  info: Record<string, MachineInfo>;
   isLoading: boolean;
   /** The machines an action is running on (App's, so it outlives a trip through the wizard). */
   working: Readonly<Record<string, Work>>;
@@ -60,6 +70,34 @@ export interface MachinesViewProps {
   bootNext?: string;
   onBooted: () => void;
 }
+
+/**
+ * A titled frame inside the scrolling detail pane - a border without Panel's overflow="hidden",
+ * which would replace the pane's own clip (see renderDetail).
+ */
+const Framed = ({
+  title,
+  color,
+  children,
+}: {
+  title: string;
+  color: string;
+  children: ReactNode;
+}) => (
+  <Box
+    marginTop={1}
+    flexShrink={0}
+    flexDirection="column"
+    borderStyle="round"
+    borderColor={color}
+    paddingX={1}
+  >
+    <Text bold color={color}>
+      {title}
+    </Text>
+    {children}
+  </Box>
+);
 
 /** How much of console.log the detail pane shows - its end, where a failure is. */
 const LOG_LINES = 30;
@@ -86,7 +124,7 @@ const vmCommand = (args: string[], pause: 'always' | 'error'): string[] => [
 
 const describeState = (status: MachineStatus) =>
   status.state === 'running'
-    ? `Running · ssh :${status.sshPort} · pid ${status.pid}`
+    ? `${status.booting ? 'Booting - not ready yet' : 'Running'} · ssh :${status.sshPort} · pid ${status.pid}`
     : status.state === 'stopped'
       ? 'Stopped · disk kept for the next up'
       : 'Not created yet';
@@ -102,6 +140,8 @@ const describeState = (status: MachineStatus) =>
 export const MachinesView = ({
   repo,
   statuses,
+  catalog,
+  info,
   isLoading,
   working,
   setWorking,
@@ -155,22 +195,42 @@ export const MachinesView = ({
       setError(name, error instanceof Error ? error.message : String(error));
     notify('');
   };
-  const [currentId, setCurrentId] = useState(session.selected);
-  const current = statuses.find((status) => status.name === currentId) ?? statuses[0];
+  // By where each comes from: yours (`vm new`, the wizard) first, then the repo's own, then each
+  // repos.d folder's - alphabetical within each.
+  const groups = new Map<string, MachineStatus[]>();
+  const groupOf = (status: MachineStatus) =>
+    status.kind === 'mine' ? 'My machines' : (status.from ?? repo.name);
+  for (const label of ['My machines', repo.name]) groups.set(label, []);
+  for (const status of statuses) {
+    const label = groupOf(status);
+    groups.set(label, [...(groups.get(label) ?? []), status]);
+  }
+  const ordered = [...groups.values()].flat();
 
-  const items: PickItem<MachineStatus>[] = statuses.map((status) => ({
+  const [currentId, setCurrentId] = useState(session.selected);
+  const current = ordered.find((status) => status.name === currentId) ?? ordered[0];
+
+  const row = (status: MachineStatus): PickItem<MachineStatus> => ({
     id: status.name,
-    label: `${working[status.name] === 'booting' ? spinner : MARK[status.state]} ${status.name}${status.from ? ` · ${status.from}` : ''}`,
+    label: `${working[status.name] === 'booting' || status.booting ? spinner : MARK[status.state]} ${status.name}`,
     hint: working[status.name]
       ? `${working[status.name]}…`
-      : status.state === 'running'
-        ? `:${status.sshPort}`
-        : status.state === 'stopped'
-          ? 'stopped'
-          : undefined,
-    hintColor: status.state === 'running' ? colors.ok : colors.muted,
+      : status.booting
+        ? 'booting…'
+        : status.state === 'running'
+          ? `:${status.sshPort}`
+          : status.state === 'stopped'
+            ? 'stopped'
+            : undefined,
+    hintColor: status.booting ? colors.warn : status.state === 'running' ? colors.ok : colors.muted,
     value: status,
-  }));
+  });
+  const items: PickItem<MachineStatus>[] = [...groups]
+    .filter(([, members]) => members.length)
+    .flatMap(([label, members]) => [
+      { id: `h-${label}`, label, isHeader: true },
+      ...members.map(row),
+    ]);
 
   const act = async (
     name: string,
@@ -252,6 +312,18 @@ export const MachinesView = ({
     });
   };
 
+  /**
+   * A machine's file, lockfile or state dir in the user's editor - the enclosing IDE's
+   * (Antigravity, Devin), else $EDITOR: dev-tools' edit handoff, once the terminal is free.
+   */
+  const edit = (path: string) => {
+    if (!canHandOff) {
+      notify(`Waiting on ${workingOn.join(', ')} - open it once that's done`, 'warn');
+      return;
+    }
+    onHandoff({ type: 'edit', path });
+  };
+
   const sshInto = (status: MachineStatus | undefined) => {
     if (!status || !canHandOff || status.state !== 'running') return;
     onHandoff({
@@ -322,10 +394,41 @@ export const MachinesView = ({
   };
 
   /** The wizard, from this machine when it's a recipe - a hand-written one can't be copied. */
+  /** The wizard, starting from the machine - any that has a recipe, a repo template included. */
   const newMachine = (status: MachineStatus | undefined) => {
-    const source = status && machineSource(repo, status.name);
-    onNew(source && source.kind !== 'module' ? status?.name : undefined);
+    const recipe = status && catalog && recipeFor(repo, catalog, status.name);
+    onNew(recipe ? status?.name : undefined);
   };
+
+  /**
+   * The machine's settings, row by row: its recipe (its own, or the one a repo template is) in
+   * the wizard's words, then its effective size and user - evaluated, so a plugin's own (GNOME's
+   * 8 GiB) shows too.
+   */
+  const settingsOf = (status: MachineStatus): [string, string][] => {
+    const recipe = catalog && recipeFor(repo, catalog, status.name);
+    const effective = info[status.name];
+    return [
+      ...(recipe && catalog
+        ? describeRecipe(catalog, recipe)
+        : [
+            [
+              'Machine',
+              catalog ? 'hand-written module - see its file' : 'reading the catalog…',
+            ] as [string, string],
+          ]),
+      [
+        'Size',
+        effective
+          ? `${effective.cpus} CPUs · ${effective.memory} MiB memory · ${effective.diskSize} MiB disk`
+          : '…',
+      ],
+      ['User', effective ? `${effective.user} (no password, passwordless sudo)` : '…'],
+    ];
+  };
+
+  /** A template (the repo's, a repos.d folder's) is copied first; one of yours is booted. */
+  const isTemplate = (status: MachineStatus) => status.kind !== 'mine';
 
   const forget = (status: MachineStatus | undefined) => {
     if (!status || busy(status.name) || machineSource(repo, status.name)?.kind !== 'mine') return;
@@ -419,6 +522,13 @@ export const MachinesView = ({
     { isActive: !prompt.isOpen },
   );
 
+  const newAction = (status: MachineStatus, primary: boolean): ToolbarAction => ({
+    hotkey: 'n',
+    label: isTemplate(status) ? 'New from this' : 'New from this (copy)',
+    onPress: () => newMachine(status),
+    ...(primary && { tone: 'primary' as const }),
+  });
+
   const actionsFor = (status: MachineStatus): ToolbarAction[] => {
     const isRunning = status.state === 'running';
     const actions: ToolbarAction[] = isRunning
@@ -433,7 +543,16 @@ export const MachinesView = ({
           { hotkey: 'd', label: 'Power off', onPress: () => powerOff(status) },
         ]
       : [
-          { hotkey: 'u', label: 'Up', onPress: () => up(status), tone: 'primary' },
+          // Side by side, the default first: a template is copied (New), yours is booted (Up).
+          ...(isTemplate(status)
+            ? [
+                newAction(status, true),
+                { hotkey: 'u', label: 'Up as is', onPress: () => up(status) },
+              ]
+            : [
+                { hotkey: 'u', label: 'Up', onPress: () => up(status), tone: 'primary' as const },
+                newAction(status, false),
+              ]),
           ...(status.meta?.gui
             ? []
             : [
@@ -464,7 +583,7 @@ export const MachinesView = ({
       actions.push({ hotkey: 'e', label: 'Export key', onPress: () => exportKey(status) });
     }
     actions.push({ hotkey: 'i', label: 'Import key', onPress: () => importKey(status) });
-    actions.push({ hotkey: 'n', label: 'New', onPress: () => newMachine(status) });
+    if (isRunning) actions.push(newAction(status, false));
     if (status.state !== 'absent') {
       actions.push({ hotkey: 'x', label: 'Kill', onPress: () => destroy(status), tone: 'danger' });
     } else if (machineSource(repo, status.name)?.kind === 'mine') {
@@ -494,13 +613,23 @@ export const MachinesView = ({
         }
         detailTitle={current?.name ?? 'Machine'}
         reservedChrome={['viewHeader']}
-        activateLabel="up / ssh"
+        activateLabel={
+          !current || current.state === 'running'
+            ? 'ssh'
+            : isTemplate(current)
+              ? 'new from this'
+              : 'up'
+        }
         activateOnClick={false}
         initialSelectedId={currentId}
         isInputActive={!prompt.isOpen}
-        onActivate={(item) =>
-          item.value?.state === 'running' ? sshInto(item.value) : up(item.value)
-        }
+        onActivate={(item) => {
+          const status = item.value;
+          if (!status) return;
+          if (status.state === 'running') sshInto(status);
+          else if (isTemplate(status)) newMachine(status);
+          else up(status);
+        }}
         onSelectionChange={(item) => {
           setCurrentId(item?.id);
           session.selected = item?.id;
@@ -514,16 +643,37 @@ export const MachinesView = ({
           const extra = machineSource(repo, status.name)?.extra;
           const failed = failedUp.has(status.name);
           return (
-            <Box flexDirection="column" flexGrow={1} overflow="hidden">
+            // No overflow="hidden" here or below (so no Panel): the detail pane scrolls it in a
+            // ScrollPanel, whose clip Ink replaces with the innermost one - content would
+            // then draw past the pane's border on a short terminal.
+            <Box flexDirection="column">
               <Toolbar actions={actionsFor(status)} />
-              <Text bold color={status.state === 'running' ? colors.ok : colors.heading}>
+              <Text
+                bold
+                color={
+                  status.booting
+                    ? colors.warn
+                    : status.state === 'running'
+                      ? colors.ok
+                      : colors.heading
+                }
+              >
                 {describeState(status)}
               </Text>
-              <Text color={colors.muted} wrap="truncate">
-                {meta
-                  ? `${meta.os} · user ${meta.user}${meta.gui ? ' · desktop in its own window' : ' · serial console'}`
-                  : 'Not built yet - [u] builds and boots it'}
-              </Text>
+              {!meta && (
+                <Text color={colors.muted} wrap="truncate">
+                  Not built yet - the first up builds it
+                </Text>
+              )}
+              {/* What it is and boots with, in the wizard's words - a template's too. */}
+              <Box flexDirection="column" marginTop={1} flexShrink={0}>
+                {settingsOf(status).map(([label, value]) => (
+                  <Text key={label} wrap="wrap">
+                    <Text color={colors.muted}>{label.padEnd(9)}</Text>
+                    <Text color={colors.text}>{value}</Text>
+                  </Text>
+                ))}
+              </Box>
               {meta?.apt && (
                 <Text
                   color={status.hasLockFile && !status.lockStale ? colors.muted : colors.warn}
@@ -539,27 +689,27 @@ export const MachinesView = ({
                 </Text>
               )}
               {errors[status.name] && (
-                <Box marginTop={1} flexShrink={0}>
-                  <Panel title="Error" color={colors.error}>
-                    <Text color={colors.text} wrap="wrap">
-                      {errors[status.name]}
+                <Framed title="Error" color={colors.error}>
+                  <Text color={colors.text} wrap="wrap">
+                    {errors[status.name]}
+                  </Text>
+                </Framed>
+              )}
+              {/* While it boots, what it's doing (a first boot's install); after a failed up, why. */}
+              {(failed || status.booting) && status.consoleTail.length > 0 && (
+                <Framed
+                  title={failed ? 'console.log - up failed' : 'console.log - booting'}
+                  color={failed ? colors.error : colors.warn}
+                >
+                  {status.consoleTail.slice(-LOG_LINES).map((line, index) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: log lines have no identity
+                    <Text key={index} color={colors.text} wrap="wrap">
+                      {line || ' '}
                     </Text>
-                  </Panel>
-                </Box>
+                  ))}
+                </Framed>
               )}
-              {failed && status.consoleTail.length > 0 && (
-                <Box marginTop={1} flexShrink={0}>
-                  <Panel title="console.log - up failed" color={colors.error}>
-                    {status.consoleTail.slice(-LOG_LINES).map((line, index) => (
-                      // biome-ignore lint/suspicious/noArrayIndexKey: log lines have no identity
-                      <Text key={index} color={colors.text} wrap="wrap">
-                        {line || ' '}
-                      </Text>
-                    ))}
-                  </Panel>
-                </Box>
-              )}
-              {/* Every path opens: files in their default app, the state dir in the file manager. */}
+              {/* Every path opens in the editor; the repos.d folder in the file manager. */}
               <Box flexDirection="column" marginTop={1}>
                 {extra && (
                   <LinkRow
@@ -571,21 +721,46 @@ export const MachinesView = ({
                 <LinkRow
                   label="machine"
                   value={displayPath(repo, machineFile(repo, status.name))}
-                  onOpen={() => openUrl(machineFile(repo, status.name))}
+                  onOpen={() => edit(machineFile(repo, status.name))}
                 />
                 {status.hasLockFile && (
                   <LinkRow
                     label="lock"
                     value={displayPath(repo, lockPath)}
-                    onOpen={() => openUrl(lockPath)}
+                    onOpen={() => edit(lockPath)}
                   />
                 )}
                 <LinkRow
                   label="state"
                   value={status.stateDir}
-                  onOpen={
-                    existsSync(status.stateDir) ? () => revealPath(status.stateDir) : undefined
-                  }
+                  onOpen={existsSync(status.stateDir) ? () => edit(status.stateDir) : undefined}
+                />
+                {/* Where its big files are: binary, so the file manager, not the editor. */}
+                {existsSync(join(status.stateDir, 'disk.qcow2')) && (
+                  <LinkRow
+                    label="disk"
+                    value={tildify(join(status.stateDir, 'disk.qcow2'))}
+                    onOpen={() => revealPath(join(status.stateDir, 'disk.qcow2'))}
+                  />
+                )}
+                {existsSync(join(status.stateDir, 'console.log')) && (
+                  <LinkRow
+                    label="console"
+                    value={tildify(join(status.stateDir, 'console.log'))}
+                    onOpen={() => edit(join(status.stateDir, 'console.log'))}
+                  />
+                )}
+                {meta?.image && (
+                  <LinkRow
+                    label="image"
+                    value={meta.image}
+                    onOpen={() => revealPath(meta.image as string)}
+                  />
+                )}
+                <LinkRow
+                  label="cache"
+                  value={tildify(cacheDir(repo))}
+                  onOpen={existsSync(cacheDir(repo)) ? () => revealPath(cacheDir(repo)) : undefined}
                 />
               </Box>
               {status.publicKey && (

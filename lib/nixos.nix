@@ -3,7 +3,7 @@
 # the host's /nix/store over 9p - no image to build or download - with a
 # qcow2 for everything the guest writes. The base below is the minimum to
 # log in; anything more comes from plugins' `nixos.modules`.
-{ pkgs, lib, cfg, nixpkgs, mkRunner, hostRequests, ... }:
+{ pkgs, lib, cfg, nixpkgs, mkRunner, hostRequests, shares, window, ... }:
 
 let
   system = nixpkgs.lib.nixosSystem {
@@ -22,7 +22,7 @@ let
           qemu.options = lib.optionals cfg.gui [
             "-vga none"
             "-device virtio-vga-gl"
-            "-display gtk,gl=on"
+            "-display ${window.display}"
           ];
         };
 
@@ -66,6 +66,22 @@ let
             install -m 644 /sys/firmware/qemu_fw_cfg/by_name/opt/vms/authorized_keys/raw /run/vms/authorized_keys
           '';
         };
+        # cfg.shares (QEMU_OPTS below has their devices). qemu-vm.nix
+        # replaces `fileSystems` with its own `virtualisation.fileSystems`.
+        virtualisation.fileSystems = lib.mapAttrs' (tag: s: lib.nameValuePair s.target {
+          device = tag;
+          fsType = "9p";
+          options = lib.splitString "," shares.options ++ [ "nofail" "x-systemd.requires=modprobe@9pnet_virtio.service" ];
+        }) cfg.shares;
+
+        # Nothing to provision - the system comes built: booted is ready.
+        systemd.services.vms-ready = {
+          wantedBy = [ "multi-user.target" ];
+          after = [ "sshd.service" "display-manager.service" ];
+          serviceConfig.Type = "oneshot";
+          path = [ pkgs.kmod ];
+          script = hostRequests.say "ready";
+        };
       }
       { environment.systemPackages = cfg.packages; }
     ] ++ cfg.nixos.modules;
@@ -79,10 +95,12 @@ mkRunner {
   script = ''
     export NIX_DISK_IMAGE="$VM_STATE/disk.qcow2"
     export QEMU_NET_OPTS="hostfwd=tcp:127.0.0.1:$VM_SSH_PORT-:22"
-    export QEMU_OPTS="-pidfile $VM_STATE/qemu.pid -fw_cfg name=opt/vms/authorized_keys,file=$VM_PUBKEY -fw_cfg name=opt/vms/user_key,file=$VM_USER_KEY -fw_cfg name=opt/vms/user_key_pub,file=$VM_USER_KEY.pub ${hostRequests.qemuArgs}"
+    export QEMU_OPTS="-pidfile $VM_STATE/qemu.pid -fw_cfg name=opt/vms/authorized_keys,file=$VM_PUBKEY -fw_cfg name=opt/vms/user_key,file=$VM_USER_KEY -fw_cfg name=opt/vms/user_key_pub,file=$VM_USER_KEY.pub ${hostRequests.qemuArgs} ${shares.qemuArgs} ${window.qemuArgs}"
     ${hostRequests.start}
+    ${shares.setup}
+    ${if cfg.gui then window.start else ""}
     cd "$VM_STATE"
     exec ${vm}/bin/run-${cfg.name}-vm
   '';
-  runtimeInputs = [ pkgs.coreutils ];
+  runtimeInputs = [ pkgs.coreutils ] ++ window.runtimeInputs;
 }

@@ -21,7 +21,16 @@ test('readMeta reads the runner meta lib/default.nix writes, shell quoting and a
     packages: ['ubuntu-desktop-minimal', 'dconf-cli', 'git'],
     // ...and from before boot_timeout: the 5 minutes `vm ssh` always waited.
     bootTimeout: 300,
+    // ...and from before the ready signal: never shown as booting.
+    reportsReady: false,
   });
+});
+
+test('readMeta: ready, the runner reporting when the guest is done booting', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vm-meta-'));
+  mkdirSync(join(dir, 'runner'));
+  writeFileSync(join(dir, 'runner', 'meta'), 'os=fedora\nuser=maksym\nready=true\n');
+  expect(readMeta(dir)?.reportsReady).toBe(true);
 });
 
 test('readMeta: boot_timeout, how long a first boot may take', () => {
