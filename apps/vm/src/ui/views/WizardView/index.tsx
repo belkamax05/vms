@@ -44,15 +44,14 @@ export interface WizardViewProps {
   onCaptureInput: (captured: boolean) => void;
 }
 
-type StepId = 'start' | 'os' | 'desktop' | 'keyboard' | 'features' | 'tools' | 'machine' | 'review';
+type StepId = 'start' | 'os' | 'desktop' | 'keyboard' | 'features' | 'machine' | 'review';
 
 const STEP_LABELS: Record<StepId, string> = {
   start: 'Start',
   os: 'OS',
   desktop: 'Desktop',
   keyboard: 'Keyboard',
-  features: 'Features',
-  tools: 'Tools',
+  features: 'Features & tools',
   machine: 'Machine',
   review: 'Review',
 };
@@ -62,9 +61,8 @@ const STEP_INTRO: Record<StepId, string> = {
   os: 'The system the machine runs.',
   desktop: 'A desktop opens its own window; without one, the machine is a serial console.',
   keyboard: 'What typing produces - the interface stays English.',
-  features: 'What else it gets. Required features switch on with what needs them.',
-  tools:
-    'Nix and direnv, so each repo can bring its own tools, and tools pre-installed from the pinned nixpkgs - any nixpkgs name works. Neither excludes the other.',
+  features:
+    'What else it gets - required features switch on with what needs them - and tools from the pinned nixpkgs: any nixpkgs name works. Space ticks, Enter moves on.',
   machine: 'Its name, and how big it is. Enter types a value, + and - step it.',
   review: 'What gets built. Nothing is created until you say so.',
 };
@@ -91,8 +89,11 @@ const FAMILY_NAMES: Record<string, string> = {
   windows: 'Windows',
 };
 
-/** The feature group shown in the Tools step, not Features: how tools arrive (Nix, direnv). */
+/** The feature group shown last, just above the tools: how tools arrive too (Nix, direnv). */
 const ENVIRONMENT = 'Environment';
+
+/** A row with a checkbox: Space (or a click on the box) ticks it, Enter moves on. */
+const isCheckbox = (item: PickItem<() => void>) => Boolean(item.controls?.length);
 
 /** A name nothing has yet: `<os>-<n>`. */
 const freeName = (repo: Repo, os: string) => {
@@ -104,7 +105,7 @@ const freeName = (repo: Repo, os: string) => {
  * saved outside the repo (no `git add`) and, if asked, booted.
  *
  * Every step is a list - arrows and Enter, or the mouse - with the step chips on top to jump
- * anywhere, and →/Tab ←/Shift-Tab to walk them. The recipe is plain state until Create: Esc
+ * anywhere; on a list of checkboxes Space ticks and Enter always moves on, and →/Tab ←/Shift-Tab to walk them. The recipe is plain state until Create: Esc
  * leaves nothing behind.
  */
 export const WizardView = ({
@@ -137,12 +138,11 @@ export const WizardView = ({
   const [note, setNote] = useState<string | undefined>();
 
   // A keyboard layout only matters to a desktop: a serial console types with the host's. No
-  // desktop step where none runs, no tools step where nixpkgs can't bring them (Windows).
+  // desktop step where none runs.
   const steps = (Object.keys(STEP_LABELS) as StepId[]).filter(
     (id) =>
       (id !== 'keyboard' || Boolean(recipe.desktop)) &&
-      (id !== 'desktop' || hasDesktops(catalog, recipe.os)) &&
-      (id !== 'tools' || hasTools(catalog, recipe.os)),
+      (id !== 'desktop' || hasDesktops(catalog, recipe.os)),
   );
   const at = steps.indexOf(step);
   const osLabel = catalog.os[recipe.os]?.label ?? recipe.os;
@@ -386,23 +386,36 @@ export const WizardView = ({
         }));
       break;
     case 'features': {
-      // Environment (Nix, direnv) is with the tools - it's how tools arrive too.
+      // Features by group, Environment (Nix, direnv) last - it's how tools arrive too - then the
+      // tools, where nixpkgs can bring them (not Windows).
       const groups = new Map<string, string[]>();
       for (const [id, feature] of Object.entries(catalog.features)) {
         const group = feature.group ?? 'Other';
         if (group === ENVIRONMENT) continue;
         groups.set(group, [...(groups.get(group) ?? []), id]);
       }
+      // What the others build on first: Nix, then direnv.
+      const needed = (id: string) =>
+        Object.values(catalog.features).some(
+          (f) =>
+            f.requires?.includes(id) ||
+            Object.values(f.requiresOn ?? {})
+              .flat()
+              .includes(id),
+        );
+      const environment = Object.keys(catalog.features)
+        .filter((id) => catalog.features[id]?.group === ENVIRONMENT)
+        .sort((a, b) => Number(needed(b)) - Number(needed(a)));
+      if (environment.length) groups.set(ENVIRONMENT, environment);
       items = [...groups].flatMap(([group, ids]) => [
         { id: `h-${group}`, label: group, isHeader: true },
         ...ids.map(featureRow),
       ]);
-      break;
-    }
-    case 'tools': {
+      if (!hasTools(catalog, recipe.os)) break;
+
       const suggested = allTools(catalog);
       const added = (recipe.tools ?? []).filter((tool) => !suggested.includes(tool));
-      const groups: [string, string[]][] = [
+      const toolSets: [string, string[]][] = [
         ...toolGroups(catalog),
         ...(added.length ? [['Added', added] as [string, string[]]] : []),
       ];
@@ -411,7 +424,8 @@ export const WizardView = ({
         // A desktop app on a machine without one would never be seen.
         const needsDesktop = group === 'Desktop apps' && !recipe.desktop;
         return {
-          id: tool,
+          // Its own namespace: a tool may share a feature's name (git).
+          id: `tool-${tool}`,
           label: tool,
           hint: needsDesktop ? 'needs a desktop' : undefined,
           hintColor: colors.warn,
@@ -427,27 +441,10 @@ export const WizardView = ({
           value: () => toggleTool(tool),
         };
       };
-      // What the others build on first: Nix, then direnv.
-      const needed = (id: string) =>
-        Object.values(catalog.features).some(
-          (f) =>
-            f.requires?.includes(id) ||
-            Object.values(f.requiresOn ?? {})
-              .flat()
-              .includes(id),
-        );
-      const environment = Object.keys(catalog.features)
-        .filter((id) => catalog.features[id]?.group === ENVIRONMENT)
-        .sort((a, b) => Number(needed(b)) - Number(needed(a)));
       items = [
-        ...(environment.length
-          ? [
-              { id: `h-${ENVIRONMENT}`, label: ENVIRONMENT, isHeader: true },
-              ...environment.map(featureRow),
-            ]
-          : []),
-        ...groups.flatMap(([group, tools]) => [
-          { id: `h-${group}`, label: group, isHeader: true },
+        ...items,
+        ...toolSets.flatMap(([group, tools]) => [
+          { id: `h-tools-${group}`, label: group, isHeader: true },
           ...tools.map(toolRow(group)),
         ]),
         {
@@ -540,6 +537,8 @@ export const WizardView = ({
       else if (key.downArrow) setCursor(moveInList(items, 1, selected, 'down'));
       else if (key.rightArrow || (key.tab && !key.shift)) next();
       else if (key.leftArrow || (key.tab && key.shift)) back();
+      // Enter on a checkbox row moves on - only Space ticks it; on any other row, both pick it.
+      else if (key.return && current && isCheckbox(current)) next();
       else if ((key.return || input === ' ') && current && !current.isHeader && !current.disabled)
         current.value?.();
       else if (input === '+' || input === '=') adjust(1);
@@ -600,7 +599,7 @@ export const WizardView = ({
               const item = items[index];
               if (item && !item.isHeader && !item.disabled) item.value?.();
             }}
-            activateOnClick={step !== 'features' && step !== 'tools'}
+            activateOnClick={(item) => !isCheckbox(item)}
           />
         </Box>
         {note && (

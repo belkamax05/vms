@@ -71,9 +71,24 @@ in
       ];
     };
 
+    # The same places as above: services.xserver.xkb alone reaches X and the
+    # console, but GNOME ignores it - with no input sources in dconf, it
+    # types with the locale's layout (English) - and KDE reads kxkbrc.
+    # Wayland compositors without config of their own (Sway) take
+    # XKB_DEFAULT_LAYOUT.
     nixos.modules = [{
       services.xserver.xkb.layout = layout;
       console.useXkbConfig = true;
+      programs.dconf.profiles.user.databases = [{
+        settings."org/gnome/desktop/input-sources".sources =
+          [ (lib.gvariant.mkTuple [ "xkb" layout ]) ];
+      }];
+      environment.etc."xdg/kxkbrc".text = ''
+        [Layout]
+        LayoutList=${layout}
+        Use=true
+      '';
+      environment.sessionVariables.XKB_DEFAULT_LAYOUT = layout;
     }];
   };
 }

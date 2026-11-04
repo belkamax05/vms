@@ -18,8 +18,8 @@
 #                    default   true: on in a blank recipe
 #                    builtinOn the OS families it's always on for - part of
 #                              the system there, not a choice
-#                  group "Environment" is shown with the tools, not with the
-#                  other features: Nix and direnv are how tools arrive too
+#                  group "Environment" is shown last, just above the tools:
+#                  Nix and direnv are how tools arrive too
 #   tools.<group>  nixpkgs attribute names the wizard suggests, grouped; any
 #                  other name works too
 #   defaultTools   the ones ticked in a blank recipe
