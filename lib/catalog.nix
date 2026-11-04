@@ -28,6 +28,10 @@
 #   keyboards.<id> keyboard layouts (XKB names) - what typing produces; the
 #                  interface stays English
 #   presets.<id>   recipes to start from
+#   previews.<id>  what desktop <id> looks like: an image URL on the
+#                  project's own site, or a file in the repo
+#   templates.<n>  machines/<n>.nix as the recipe it is (vm shows it, the
+#                  wizard copies it)
 #
 # Everything but `module`/`base` is plain data: `info` is what `vm` reads.
 { lib }:
@@ -175,6 +179,26 @@ let
 
     presets = { };
 
+    # What each desktop looks like, for the wizard: an image on the project's
+    # own site, fetched afresh each run and kept in ~/.cache/vms/previews for
+    # when it can't be (offline, moved). Sway's site has none, so its is the
+    # one Wikipedia's article uses, from Wikimedia Commons (CC BY-SA 4.0). A
+    # path to a file in the repo works too.
+    previews = {
+      gnome = "https://www.gnome.org/img/workspaces-l.webp";
+      kde = "https://kde.org/announcements/plasma/6/6.8.0/fullscreen_with_apps.png";
+      xfce = "https://cdn.xfce.org/about/screenshots/4.20-1.png";
+      cinnamon = "https://www.linuxmint.com/web/img/screenshots/c1.jpg";
+      cosmic = "https://cdn11.bigcommerce.com/s-pywjnxrcr2/images/stencil/original/image-manager/cosmic-screensr20.png?t=1758571785";
+      sway = "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Sway_1.4_Window_Manager.png/1280px-Sway_1.4_Window_Manager.png";
+      hyprland = "https://hypr.land/ricing_competitions/1/amadeus.webp";
+      lxqt = "https://lxqt-project.org/images/screenshots/dark.png";
+      mate = "https://mate-desktop.org/screens/screenshot.jpg";
+      budgie = "https://buddiesofbudgie.org/images/blog/2026/01/budgie-10-10-featured.jpg";
+      pantheon = "https://elementary.io/images/screenshots/desktop.jpg";
+      steam = "https://cdn.fastly.steamstatic.com/steamdeck/images/video/overview_oled.jpg";
+    };
+
     # The repo's hand-written machines (machines/*.nix) as the recipes they
     # are - what `vm` shows for each, and what the wizard starts from when
     # one is copied. Every OS whose base is machines/<id>.nix is that
@@ -203,6 +227,7 @@ let
     toolOrder = lib.unique (base.toolOrder ++ (extra.toolOrder or [ ]));
     presets = base.presets // (extra.presets or { });
     templates = base.templates // (extra.templates or { });
+    previews = base.previews // (extra.previews or { });
   };
 in
 {
@@ -221,5 +246,7 @@ in
     features = strip c.features;
     inherit (c) tools defaultTools toolOrder keyboards presets;
     templates = c.templates or { };
+    # A repo file becomes its store path - copied there by the eval itself.
+    previews = lib.mapAttrs (_: toString) (c.previews or { });
   };
 }

@@ -56,6 +56,8 @@ export interface Catalog {
   presets: Record<string, Recipe>;
   /** The repo's hand-written machines (machines/*.nix) as the recipes they are, by name. */
   templates: Record<string, Recipe>;
+  /** What each desktop looks like: an image URL on its project's site, or a local file. */
+  previews: Record<string, string>;
 }
 
 /** Ubuntu for every Ubuntu release: what features and desktops say they run on. */
@@ -100,6 +102,7 @@ export const normalizeCatalog = (raw: Partial<Record<keyof Catalog, unknown>>): 
   toolOrder: (raw.toolOrder ?? []) as string[],
   presets: (raw.presets ?? {}) as Catalog['presets'],
   templates: (raw.templates ?? {}) as Catalog['templates'],
+  previews: (raw.previews ?? {}) as Catalog['previews'],
 });
 
 const catalogs = new Map<string, Catalog>();

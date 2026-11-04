@@ -147,6 +147,13 @@ that can't work fails with the reason. `vm catalog` lists what's there.
   needs no `git add`; `vm` builds it with `--impure` against the repo's
   catalog (and every repos.d folder's, see below). It starts blank or from any recipe machine, and outlives
   `vm kill`; `vm forget` (`[f]`) deletes it.
+- The wizard's Desktop step shows what the highlighted desktop looks like
+  (the catalog's `previews`): an image from the project's own site, fetched
+  afresh each run and cached in `~/.cache/vms/previews/` for when it can't
+  be. It's drawn through the terminal's graphics protocol (Kitty, Sixel,
+  iTerm2), or in coloured text cells where there is none. Sway's site has
+  no screenshot, so its preview is the one Wikipedia uses, from Wikimedia
+  Commons.
 
 `VMS_FLAKE=path:$PWD vm ...` makes `vm` read the repo's files as they are,
 untracked ones included - for trying a change before committing it.

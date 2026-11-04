@@ -51,6 +51,7 @@ const catalog: Catalog = {
   toolOrder: ['Languages & build'],
   presets: {},
   templates: { ubuntu: { os: 'ubuntu', desktop: null } },
+  previews: {},
 };
 
 let home: string;

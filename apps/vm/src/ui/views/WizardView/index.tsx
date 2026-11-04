@@ -33,6 +33,7 @@ import {
   unavailable,
 } from '../../../core/recipes';
 import { machineSources, type Repo } from '../../../core/repo';
+import DesktopPreview from '../../DesktopPreview';
 
 export interface WizardViewProps {
   repo: Repo;
@@ -570,6 +571,25 @@ export const WizardView = ({
   ];
   const listRows = Math.max(4, viewport.rows - 22);
 
+  // The Desktop step shows the highlighted desktop: beside the list on a wide terminal, under it
+  // on a narrow one.
+  const previewSource = step === 'desktop' && current ? catalog.previews[current.id] : undefined;
+  const preview =
+    previewSource && current
+      ? {
+          id: current.id,
+          label: catalog.desktops[current.id]?.label ?? current.id,
+          source: previewSource,
+        }
+      : undefined;
+  // Half the panel beside the list (its border and padding, and the gap, taken off), as tall
+  // as the list's box.
+  const previewBeside = viewport.columns >= 100;
+  const previewCols = previewBeside
+    ? Math.floor((viewport.columns - 8) / 2)
+    : Math.max(20, viewport.columns - 8);
+  const previewRows = previewBeside ? Math.max(6, listRows + 2) : 10;
+
   return (
     <Box flexDirection="column" flexGrow={1} overflow="hidden">
       <Box flexShrink={0}>
@@ -589,19 +609,38 @@ export const WizardView = ({
         <Text color={colors.muted} wrap="wrap">
           {STEP_INTRO[step]}
         </Text>
-        <Box marginTop={1} flexDirection="column" flexGrow={1}>
-          <PickList
-            items={items}
-            selected={selected}
-            visibleRows={listRows}
-            isFocused
-            onSelect={setCursor}
-            onActivate={(index) => {
-              const item = items[index];
-              if (item && !item.isHeader && !item.disabled) item.value?.();
-            }}
-            activateOnClick={(item) => !isCheckbox(item)}
-          />
+        <Box
+          marginTop={1}
+          flexDirection={previewBeside ? 'row' : 'column'}
+          flexGrow={1}
+          gap={previewBeside ? 2 : 0}
+        >
+          <Box flexDirection="column" flexGrow={1}>
+            <PickList
+              items={items}
+              selected={selected}
+              visibleRows={
+                preview && !previewBeside ? Math.max(4, listRows - previewRows) : listRows
+              }
+              isFocused
+              onSelect={setCursor}
+              onActivate={(index) => {
+                const item = items[index];
+                if (item && !item.isHeader && !item.disabled) item.value?.();
+              }}
+              activateOnClick={(item) => !isCheckbox(item)}
+            />
+          </Box>
+          {preview && (
+            <DesktopPreview
+              key={preview.id}
+              id={preview.id}
+              label={preview.label}
+              source={preview.source}
+              cols={previewCols}
+              rows={previewRows}
+            />
+          )}
         </Box>
         {note && (
           <Text color={colors.warn} wrap="wrap">
